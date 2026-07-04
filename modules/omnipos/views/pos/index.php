@@ -6,73 +6,84 @@
             <div class="col-md-12">
                 <div class="panel_s">
                     <div class="panel-body">
-                        <div class="clearfix">
-                            <h4 class="no-margin pull-left">OmniPOS Smart Register</h4>
-                            <div class="pull-right">
-                                <a href="<?php echo admin_url('omnipos/pos/shifts'); ?>" class="btn btn-default">Shift & Returns Tab</a>
+                        <div class="omnipos-topbar">
+                            <div>
+                                <h4 class="no-margin">OmniPOS Smart Register</h4>
+                                <div class="text-muted">Clean cashier workflow with progressive disclosure and fast checkout.</div>
+                            </div>
+                            <div class="omnipos-topbar-actions">
+                                <button type="button" class="btn btn-default" data-toggle="collapse" data-target="#omnipos-customer-panel" aria-expanded="false" aria-controls="omnipos-customer-panel">Attach Customer</button>
+                                <div class="btn-group">
+                                    <button type="button" class="btn btn-default dropdown-toggle" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">Actions <span class="caret"></span></button>
+                                    <ul class="dropdown-menu dropdown-menu-right">
+                                        <li><a href="<?php echo admin_url('omnipos/pos/shifts'); ?>">Shift & Returns</a></li>
+                                        <li><a href="<?php echo admin_url('omnipos/inventory'); ?>">Inventory</a></li>
+                                        <li><a href="<?php echo admin_url('omnipos/settings'); ?>">Settings</a></li>
+                                    </ul>
+                                </div>
                                 <button type="button" class="btn btn-primary" id="omnipos-toggle-fullscreen">Full Screen</button>
                             </div>
                         </div>
-                        <p class="text-muted">Category grid, live stock badges, scanner mode, line modifiers, and split-tender checkout.</p>
 
                         <?php if ($current_shift) { ?>
-                            <div class="alert alert-success">Open shift: <?php echo e($current_shift['register_key']); ?>, started <?php echo _dt($current_shift['opened_at']); ?></div>
+                            <div class="alert alert-success omnipos-status-alert">Open shift: <?php echo e($current_shift['register_key']); ?>, started <?php echo _dt($current_shift['opened_at']); ?></div>
                         <?php } else { ?>
-                            <div class="alert alert-warning">No shift open. Open a shift to start scanning and sales.</div>
+                            <div class="alert alert-warning omnipos-status-alert">No shift open. Open a shift from Shift & Returns tab to begin sales.</div>
                         <?php } ?>
 
-                        <div class="row">
-                            <div class="col-md-4">
-                                <div class="form-group">
-                                    <label>Client ID</label>
-                                    <input type="number" id="omnipos-client-id" class="form-control" placeholder="Customer ID for invoice">
+                        <div id="omnipos-customer-panel" class="collapse">
+                            <div class="row">
+                                <div class="col-md-4">
+                                    <div class="form-group">
+                                        <label>Client ID</label>
+                                        <input type="number" id="omnipos-client-id" class="form-control" placeholder="Customer ID for invoice">
+                                    </div>
+                                </div>
+                                <div class="col-md-4">
+                                    <div class="form-group">
+                                        <label>Points to Use</label>
+                                        <input type="number" id="omnipos-points-use" class="form-control" min="0" value="0">
+                                    </div>
+                                </div>
+                                <div class="col-md-4">
+                                    <div class="form-group">
+                                        <label>Wallet Barcode Lookup</label>
+                                        <div class="input-group">
+                                            <input type="text" id="omnipos-wallet-barcode" class="form-control" placeholder="Scan staff QR/barcode token">
+                                            <span class="input-group-btn">
+                                                <button class="btn btn-default" type="button" id="omnipos-wallet-lookup-btn">Lookup</button>
+                                            </span>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
-                            <div class="col-md-4">
-                                <div class="form-group">
-                                    <label>Points to Use</label>
-                                    <input type="number" id="omnipos-points-use" class="form-control" min="0" value="0">
+                            <div class="row">
+                                <div class="col-md-12">
+                                    <div class="well well-sm" id="omnipos-wallet-profile" style="display:none;">
+                                        <strong id="omnipos-wallet-name"></strong>
+                                        <span id="omnipos-wallet-employee" class="text-muted"></span>
+                                        <div class="tw-mt-1">
+                                            Available: <span id="omnipos-wallet-available">0.00</span> |
+                                            Remaining Limit: <span id="omnipos-wallet-remaining">0.00</span> |
+                                            Daily Left: <span id="omnipos-wallet-daily-left">0.00</span>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
+                        </div>
+
+                        <div class="row omnipos-control-row">
                             <div class="col-md-4">
                                 <div class="form-group">
                                     <label>Add Qty</label>
                                     <input type="number" id="omnipos-add-qty" class="form-control" min="1" step="1" value="1">
                                 </div>
                             </div>
-                        </div>
-
-                        <div class="row">
-                            <div class="col-md-4 col-md-offset-8">
+                            <div class="col-md-8">
                                 <div class="form-group position-relative">
                                     <label>Instant Search</label>
                                     <input type="text" id="omnipos-search" class="form-control" placeholder="Search by name, SKU, barcode, custom fields">
                                     <div id="omnipos-search-results" class="list-group omnipos-search-results hidden"></div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="row">
-                            <div class="col-md-4">
-                                <div class="form-group">
-                                    <label>Wallet Barcode Lookup</label>
-                                    <div class="input-group">
-                                        <input type="text" id="omnipos-wallet-barcode" class="form-control" placeholder="Scan staff QR/barcode token">
-                                        <span class="input-group-btn">
-                                            <button class="btn btn-default" type="button" id="omnipos-wallet-lookup-btn">Lookup</button>
-                                        </span>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="col-md-8">
-                                <div class="well well-sm tw-mt-2" id="omnipos-wallet-profile" style="display:none;">
-                                    <strong id="omnipos-wallet-name"></strong>
-                                    <span id="omnipos-wallet-employee" class="text-muted"></span>
-                                    <div class="tw-mt-1">
-                                        Available: <span id="omnipos-wallet-available">0.00</span> |
-                                        Remaining Limit: <span id="omnipos-wallet-remaining">0.00</span> |
-                                        Daily Left: <span id="omnipos-wallet-daily-left">0.00</span>
-                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -92,7 +103,7 @@
                                 $locked = $zero_stock_locked && $stockQty <= 0;
                                 $itemNameFilter = function_exists('mb_strtolower') ? mb_strtolower((string) $item['description']) : strtolower((string) $item['description']);
                             ?>
-                                <div class="col-md-3 col-xs-6 tw-mb-2 omnipos-item-card" data-group="<?php echo $groupId; ?>" data-item-name="<?php echo e($itemNameFilter); ?>">
+                                <div class="col-md-3 col-xs-6 omnipos-item-card" data-group="<?php echo $groupId; ?>" data-item-name="<?php echo e($itemNameFilter); ?>">
                                     <button class="btn btn-default btn-block omnipos-btn omnipos-add-item <?php echo $locked ? 'omnipos-stock-locked' : ''; ?>" data-item-id="<?php echo $itemId; ?>" <?php echo $locked ? 'disabled' : ''; ?>>
                                         <span class="omnipos-item-name"><?php echo e($item['description']); ?></span><br>
                                         <small><?php echo app_format_money((float) $item['rate'], get_base_currency()); ?></small>
@@ -102,17 +113,21 @@
                             <?php } ?>
                         </div>
 
+                        <div class="omnipos-grid-pagination">
+                            <button type="button" class="btn btn-default btn-sm" id="omnipos-page-prev">Prev</button>
+                            <span id="omnipos-page-indicator">Page 1 / 1</span>
+                            <button type="button" class="btn btn-default btn-sm" id="omnipos-page-next">Next</button>
+                        </div>
+
                         <hr>
 
                         <div class="table-responsive">
-                            <table class="table table-striped" id="omnipos-cart-table">
+                            <table class="table table-striped omnipos-cart-table" id="omnipos-cart-table">
                                 <thead>
                                     <tr>
                                         <th>Item</th>
-                                        <th class="text-right">Qty</th>
-                                        <th class="text-right">Unit</th>
-                                        <th class="text-right">Discount</th>
-                                        <th class="text-right">Tax</th>
+                                        <th class="text-center">Qty</th>
+                                        <th class="text-right">Each</th>
                                         <th class="text-right">Line Total</th>
                                         <th class="text-right">Action</th>
                                     </tr>
@@ -177,6 +192,9 @@
                         </div>
 
                         <div class="row tw-mt-3">
+                            <div class="col-md-12 tw-mb-2">
+                                <button type="button" class="btn btn-success btn-lg btn-block omnipos-pay-primary" id="omnipos-pay-primary">PAY NOW (Cash)</button>
+                            </div>
                             <div class="col-md-3">
                                 <button type="button" class="btn btn-success btn-block omnipos-btn" id="omnipos-checkout-cash">Checkout Cash</button>
                             </div>
@@ -318,17 +336,108 @@
 </div>
 
 <style>
+:root {
+    --omni-bg: #f5f7fb;
+    --omni-surface: #ffffff;
+    --omni-border: #d9e1ec;
+    --omni-text: #1f2a37;
+    --omni-muted: #6b7280;
+    --omni-primary: #2563eb;
+}
+
+#wrapper .content {
+    background: var(--omni-bg);
+}
+
+.panel_s > .panel-body {
+    background: var(--omni-surface);
+    border: 1px solid var(--omni-border);
+    border-radius: 12px;
+    padding: 16px;
+}
+
+.omnipos-topbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.omnipos-topbar-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.omnipos-status-alert {
+    margin-bottom: 12px;
+}
+
+.omnipos-control-row {
+    margin-bottom: 8px;
+}
+
 .omnipos-btn {
-    min-height: 48px;
+    min-height: 44px;
+    font-weight: 600;
+    border-radius: 10px;
+}
+
+.omnipos-pay-primary {
+    min-height: 52px;
+    border-radius: 12px;
+    font-size: 18px;
+    font-weight: 700;
+}
+
+.omnipos-cart-table thead th {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--omni-muted);
+}
+
+.omnipos-qty-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.omnipos-qty-btn {
+    width: 26px;
+    height: 26px;
+    border-radius: 8px;
+    border: 1px solid var(--omni-border);
+    background: #fff;
+    color: var(--omni-text);
+    line-height: 1;
+    padding: 0;
+}
+
+.omnipos-qty-value {
+    min-width: 48px;
+    text-align: center;
     font-weight: 600;
 }
+
 .omnipos-stock-badge {
     display: inline-block;
     margin-top: 6px;
 }
+
 .omnipos-stock-locked {
     opacity: 0.55;
 }
+
+.omnipos-grid-pagination {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 10px;
+    margin-top: 8px;
+    margin-bottom: 8px;
+}
+
 .omnipos-search-results {
     position: absolute;
     z-index: 25;
@@ -339,9 +448,28 @@
     background: #fff;
     border: 1px solid #ddd;
 }
+
 .omnipos-denom {
     margin-right: 4px;
     margin-bottom: 4px;
+    border-radius: 10px;
+}
+
+#omnipos-grid .omnipos-item-card {
+    margin-bottom: 12px;
+}
+
+#omnipos-grid .omnipos-add-item {
+    border: 1px solid var(--omni-border);
+    border-radius: 12px;
+    min-height: 110px;
+    white-space: normal;
+}
+
+#omnipos-grid .omnipos-add-item:focus,
+#omnipos-grid .omnipos-add-item:hover {
+    border-color: var(--omni-primary);
+    box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.08);
 }
 </style>
 
@@ -349,11 +477,11 @@
 (function () {
     'use strict';
 
-    var zeroStockLocked = <?php echo $zero_stock_locked ? 'true' : 'false'; ?>;
     var selectedWallet = null;
-    var lastTotals = {
-        grand_total: 0
-    };
+    var currentCategory = 'all';
+    var currentPage = 1;
+    var pageSize = 16;
+    var lastTotals = { grand_total: 0 };
 
     function csrfPayload(payload) {
         if (typeof csrfData !== 'undefined') {
@@ -368,6 +496,47 @@
 
     function money(v) {
         return parseFloat(v || 0).toFixed(2);
+    }
+
+    function getAddQty() {
+        var qty = parseInt($('#omnipos-add-qty').val() || '1', 10);
+        if (!qty || qty < 1) {
+            qty = 1;
+        }
+        return qty;
+    }
+
+    function renderGridPage() {
+        var visibleItems = [];
+        $('.omnipos-item-card').each(function () {
+            var card = $(this);
+            var group = parseInt(card.data('group'), 10);
+            if (currentCategory !== 'all' && group !== parseInt(currentCategory, 10)) {
+                card.hide();
+                return;
+            }
+            visibleItems.push(card);
+        });
+
+        var totalPages = Math.max(1, Math.ceil(visibleItems.length / pageSize));
+        if (currentPage > totalPages) {
+            currentPage = totalPages;
+        }
+
+        var start = (currentPage - 1) * pageSize;
+        var end = start + pageSize;
+
+        $.each(visibleItems, function (idx, card) {
+            if (idx >= start && idx < end) {
+                card.show();
+            } else {
+                card.hide();
+            }
+        });
+
+        $('#omnipos-page-indicator').text('Page ' + currentPage + ' / ' + totalPages);
+        $('#omnipos-page-prev').prop('disabled', currentPage <= 1);
+        $('#omnipos-page-next').prop('disabled', currentPage >= totalPages);
     }
 
     function renderTotals(totals) {
@@ -388,11 +557,13 @@
 
         $.each(items || [], function (_, row) {
             var tr = '<tr>' +
-                '<td>' + (row.description || '') + '</td>' +
-                '<td class="text-right">' + money(row.qty) + '</td>' +
+                '<td><div><strong>' + (row.description || '') + '</strong></div><div class="text-muted small">Tax: ' + money(row.line_tax_amount) + ' | Disc: ' + money(row.line_discount_amount) + '</div></td>' +
+                '<td class="text-center"><div class="omnipos-qty-wrap">' +
+                '<button type="button" class="omnipos-qty-btn omnipos-qty-minus" data-line-id="' + (row.id || '') + '">-</button>' +
+                '<span class="omnipos-qty-value">' + money(row.qty) + '</span>' +
+                '<button type="button" class="omnipos-qty-btn omnipos-qty-plus" data-line-id="' + (row.id || '') + '">+</button>' +
+                '</div></td>' +
                 '<td class="text-right">' + money(row.unit_price) + '</td>' +
-                '<td class="text-right">' + money(row.line_discount_amount) + '</td>' +
-                '<td class="text-right">' + money(row.line_tax_amount) + '</td>' +
                 '<td class="text-right">' + money(row.line_total) + '</td>' +
                 '<td class="text-right"><button class="btn btn-xs btn-default omnipos-edit-line" ' +
                 'data-line-id="' + (row.id || '') + '" ' +
@@ -437,18 +608,35 @@
         }
     }
 
-    function getAddQty() {
-        var qty = parseInt($('#omnipos-add-qty').val() || '1', 10);
-        if (!qty || qty < 1) {
-            qty = 1;
-        }
-        return qty;
-    }
-
     function addItem(itemId, qty) {
         $.post(admin_url + 'omnipos/pos/add_item', csrfPayload({ item_id: itemId, qty: qty || 1 }), function (res) {
             if (!res || !res.success) {
                 showMessage(res && res.message ? res.message : 'Add failed', 'warning');
+                return;
+            }
+            renderCart(res.data.cart_items, res.data.cart, res.data.totals);
+        }, 'json');
+    }
+
+    function adjustLineQty(lineId, delta) {
+        var btn = $('.omnipos-edit-line[data-line-id="' + lineId + '"]');
+        if (!btn.length) {
+            return;
+        }
+
+        var currentQty = parseFloat(btn.data('line-qty') || '0');
+        var targetQty = Math.max(0.01, currentQty + delta);
+
+        $.post(admin_url + 'omnipos/pos/update_line_item', csrfPayload({
+            line_id: lineId,
+            qty: targetQty,
+            discount_type: btn.data('line-discount-type') || '',
+            discount_value: btn.data('line-discount-value') || 0,
+            tax_rate: btn.data('line-tax-rate') || 0,
+            notes: btn.data('line-notes') || ''
+        }), function (res) {
+            if (!res || !res.success) {
+                showMessage(res && res.message ? res.message : 'Failed to update qty', 'warning');
                 return;
             }
             renderCart(res.data.cart_items, res.data.cart, res.data.totals);
@@ -613,15 +801,21 @@
         e.preventDefault();
         $('#omnipos-category-tabs li').removeClass('active');
         $(this).parent().addClass('active');
+        currentCategory = $(this).data('group');
+        currentPage = 1;
+        renderGridPage();
+    });
 
-        var gid = $(this).data('group');
-        $('.omnipos-item-card').each(function () {
-            if (gid === 'all' || parseInt($(this).data('group'), 10) === parseInt(gid, 10)) {
-                $(this).show();
-            } else {
-                $(this).hide();
-            }
-        });
+    $('#omnipos-page-prev').on('click', function () {
+        if (currentPage > 1) {
+            currentPage -= 1;
+            renderGridPage();
+        }
+    });
+
+    $('#omnipos-page-next').on('click', function () {
+        currentPage += 1;
+        renderGridPage();
     });
 
     $('#omnipos-apply-adjustments').on('click', function () {
@@ -646,6 +840,14 @@
         $('#omnipos-line-tax-rate').val($(this).data('line-tax-rate') || 0);
         $('#omnipos-line-notes').val($(this).data('line-notes') || '');
         $('#omniposLineModal').modal('show');
+    });
+
+    $(document).on('click', '.omnipos-qty-minus', function () {
+        adjustLineQty(parseInt($(this).data('line-id'), 10), -1);
+    });
+
+    $(document).on('click', '.omnipos-qty-plus', function () {
+        adjustLineQty(parseInt($(this).data('line-id'), 10), 1);
     });
 
     $('#omnipos-save-line').on('click', function () {
@@ -683,7 +885,7 @@
 
     $('#omnipos-cash-received').on('input', refreshChangeDue);
 
-    $('#omnipos-checkout-cash').on('click', function () {
+    $('#omnipos-pay-primary, #omnipos-checkout-cash').on('click', function () {
         checkout('cash');
     });
 
@@ -741,6 +943,7 @@
     });
 
     reloadCart();
+    renderGridPage();
 })();
 </script>
 <?php init_tail(); ?>
