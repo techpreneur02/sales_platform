@@ -61,7 +61,7 @@
                             $isFavorite = $itemIndex < 10 ? '1' : '0';
                             $itemIndex++;
                             ?>
-                            <button class="omnipos-tile omnipos-add-item <?php echo $locked ? 'omnipos-stock-locked' : ''; ?>" data-item-id="<?php echo $itemId; ?>" data-group="<?php echo $groupId; ?>" data-item-name="<?php echo e($nameLower); ?>" data-favorite="<?php echo $isFavorite; ?>" <?php echo $locked ? 'disabled' : ''; ?>>
+                            <button type="button" class="omnipos-tile omnipos-add-item <?php echo $locked ? 'omnipos-stock-locked' : ''; ?>" data-item-id="<?php echo $itemId; ?>" data-group="<?php echo $groupId; ?>" data-item-name="<?php echo e($nameLower); ?>" data-favorite="<?php echo $isFavorite; ?>" data-stock-locked="<?php echo $locked ? '1' : '0'; ?>">
                                 <span class="omnipos-tile-media"><?php echo e($initials); ?></span>
                                 <span class="omnipos-tile-name"><?php echo e($itemName); ?></span>
                                 <span class="omnipos-tile-price"><?php echo app_format_money((float) $item['rate'], get_base_currency()); ?></span>
@@ -182,10 +182,10 @@
 
             <div class="omnipos-bottom-nav">
                 <button type="button" class="active">Checkout</button>
-                <button type="button" onclick="window.location.href='<?php echo admin_url('omnipos/pos/shifts'); ?>'">Transactions</button>
-                <button type="button" onclick="window.location.href='<?php echo admin_url('omnipos/inventory'); ?>'">Orders</button>
-                <button type="button" onclick="window.location.href='<?php echo admin_url('omnipos/settings'); ?>'">Notifications</button>
-                <button type="button" onclick="window.location.href='<?php echo admin_url('omnipos/settings'); ?>'">More</button>
+                <button type="button" onclick="window.location.href='<?php echo admin_url('omnipos/pos/shifts'); ?>'">Shifts</button>
+                <button type="button" onclick="window.location.href='<?php echo admin_url('omnipos/pos/shifts'); ?>#omnipos-suspended-list'">Suspended</button>
+                <button type="button" onclick="window.location.href='<?php echo admin_url('omnipos/inventory'); ?>'">Inventory</button>
+                <button type="button" onclick="window.location.href='<?php echo admin_url('omnipos/settings'); ?>'">Settings</button>
             </div>
         </div>
     </div>
@@ -979,16 +979,36 @@
     }
 
     function toggleFullscreen() {
-        var el = document.documentElement;
-        if (!document.fullscreenElement) {
-            if (el.requestFullscreen) {
-                el.requestFullscreen();
+        var target = document.getElementById('wrapper') || document.documentElement;
+        var isFull = !!(document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement);
+
+        if (!isFull) {
+            if (target.requestFullscreen) {
+                target.requestFullscreen();
+                return;
             }
+            if (target.webkitRequestFullscreen) {
+                target.webkitRequestFullscreen();
+                return;
+            }
+            if (target.msRequestFullscreen) {
+                target.msRequestFullscreen();
+                return;
+            }
+            showMessage('Fullscreen is not supported in this browser mode.', 'warning');
             return;
         }
 
         if (document.exitFullscreen) {
             document.exitFullscreen();
+            return;
+        }
+        if (document.webkitExitFullscreen) {
+            document.webkitExitFullscreen();
+            return;
+        }
+        if (document.msExitFullscreen) {
+            document.msExitFullscreen();
         }
     }
 
@@ -1024,8 +1044,9 @@
         $('#omnipos-search').val('');
     });
 
-    $(document).on('click', '.omnipos-add-item', function () {
-        if ($(this).is(':disabled')) {
+    $(document).on('click', '.omnipos-add-item', function (e) {
+        e.preventDefault();
+        if ($(this).data('stock-locked') === 1 || String($(this).data('stock-locked')) === '1') {
             showMessage('Zero-stock lockout is active for this product.', 'warning');
             return;
         }
@@ -1048,15 +1069,14 @@
         }
     });
 
-    $('#omnipos-mode-tabs').on('click', '.omnipos-mode-tab', function () {
+    $('#omnipos-mode-tabs').on('click', '.omnipos-mode-tab', function (e) {
+        e.preventDefault();
         $('#omnipos-mode-tabs .omnipos-mode-tab').removeClass('active');
         $(this).addClass('active');
         currentView = $(this).data('view');
         currentPage = 1;
-        if (currentView === 'library') {
-            $('#omnipos-category-chips').show();
-        } else {
-            $('#omnipos-category-chips').hide();
+        $('#omnipos-category-chips').show();
+        if (currentView === 'keypad') {
             currentCategory = 'all';
             $('#omnipos-category-chips .omnipos-chip').removeClass('active');
             $('#omnipos-category-chips .omnipos-chip[data-group="all"]').addClass('active');
@@ -1064,7 +1084,8 @@
         renderGridPage();
     });
 
-    $('#omnipos-category-chips').on('click', '.omnipos-chip', function () {
+    $('#omnipos-category-chips').on('click', '.omnipos-chip', function (e) {
+        e.preventDefault();
         $('#omnipos-category-chips .omnipos-chip').removeClass('active');
         $(this).addClass('active');
         currentCategory = $(this).data('group');
@@ -1188,7 +1209,7 @@
     });
 
     reloadCart();
-    $('#omnipos-category-chips').hide();
+    $('#omnipos-category-chips').show();
     setPaymentMethod('cash');
     renderGridPage();
 })();
