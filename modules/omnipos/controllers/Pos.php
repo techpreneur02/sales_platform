@@ -935,6 +935,157 @@ class Pos extends AdminController
         ]);
     }
 
+    public function recent_transactions()
+    {
+        if (!$this->input->is_ajax_request()) {
+            show_404();
+        }
+
+        $rows = $this->db
+            ->select('id, invoice_id, client_id, payment_type, total, created_at')
+            ->order_by('id', 'DESC')
+            ->limit(20)
+            ->get(db_prefix() . 'pos_transactions')
+            ->result_array();
+
+        $this->json_response(true, 'Recent transactions loaded.', [
+            'rows' => $rows,
+        ]);
+    }
+
+    public function refund_transaction()
+    {
+        if (!$this->input->is_ajax_request()) {
+            show_404();
+        }
+
+        $shift = $this->get_open_shift();
+        if (!$shift) {
+            $this->json_response(false, 'Open a shift before processing refunds.');
+        }
+
+        $originalTransactionId = (int) $this->input->post('transaction_id');
+        $refundType = strtolower(trim((string) $this->input->post('refund_type', true)));
+        $reason = trim((string) $this->input->post('reason', true));
+        $itemsJson = (string) $this->input->post('refund_items');
+
+        if ($originalTransactionId < 1) {
+            $this->json_response(false, 'Transaction ID is required.');
+        }
+
+        if (!in_array($refundType, ['cash', 'card', 'wallet'], true)) {
+            $refundType = 'cash';
+        }
+
+        $original = $this->db
+            ->where('id', $originalTransactionId)
+            ->get(db_prefix() . 'pos_transactions')
+            ->row_array();
+
+        if (!$original) {
+            $this->json_response(false, 'Original transaction not found.');
+        }
+
+        $requestMap = $this->parse_refund_request_items($itemsJson);
+        if ($requestMap === false) {
+            $this->json_response(false, 'Invalid refund item payload.');
+        }
+
+        $lines = $this->build_refund_lines((int) $original['id'], $requestMap);
+        if (empty($lines)) {
+            $this->json_response(false, 'No refundable quantity remains for the selected transaction/items.');
+        }
+
+        $refundAmount = 0.0;
+        foreach ($lines as $line) {
+            $refundAmount += (float) $line['line_total'];
+        }
+        $refundAmount = round($refundAmount, 2);
+
+        if ($refundAmount <= 0) {
+            $this->json_response(false, 'Calculated refund amount is zero.');
+        }
+
+        $warehouseId = $this->get_transaction_warehouse_id($original);
+
+        $this->db->insert(db_prefix() . 'pos_refunds', [
+            'original_transaction_id' => (int) $original['id'],
+            'shift_id' => (int) $shift['id'],
+            'staff_id' => get_staff_user_id(),
+            'refund_type' => $refundType,
+            'amount' => $refundAmount,
+            'reason' => $reason !== '' ? $reason : 'POS refund',
+            'status' => 'completed',
+            'created_at' => date('Y-m-d H:i:s'),
+        ]);
+
+        $refundId = (int) $this->db->insert_id();
+
+        $this->db->insert(db_prefix() . 'pos_transactions', [
+            'shift_id'        => (int) $shift['id'],
+            'cart_id'         => (int) $original['cart_id'],
+            'invoice_id'      => (int) $original['invoice_id'],
+            'staff_id'        => get_staff_user_id(),
+            'client_id'       => (int) $original['client_id'],
+            'subtotal'        => -$refundAmount,
+            'discount_total'  => 0,
+            'total'           => -$refundAmount,
+            'payment_type'    => $refundType,
+            'card_brand'      => null,
+            'card_auth_code'  => null,
+            'card_last4'      => null,
+            'created_at'      => date('Y-m-d H:i:s'),
+        ]);
+
+        $refundTransactionId = (int) $this->db->insert_id();
+
+        foreach ($lines as $line) {
+            $this->db->insert(db_prefix() . 'pos_refund_items', [
+                'refund_id' => $refundId,
+                'transaction_item_id' => (int) $line['transaction_item_id'],
+                'item_id' => (int) $line['item_id'],
+                'qty' => (float) $line['qty'],
+                'unit_price' => (float) $line['unit_price'],
+                'line_total' => (float) $line['line_total'],
+            ]);
+
+            $this->db->insert(db_prefix() . 'pos_transaction_items', [
+                'transaction_id' => $refundTransactionId,
+                'item_id' => (int) $line['item_id'],
+                'qty' => -(float) $line['qty'],
+                'unit_price' => (float) $line['unit_price'],
+                'line_total' => -(float) $line['line_total'],
+            ]);
+
+            $this->increment_stock_for_refund((int) $line['item_id'], (float) $line['qty'], (int) $original['id'], (int) $warehouseId);
+        }
+
+        $this->db->where('id', $refundId);
+        $this->db->update(db_prefix() . 'pos_refunds', [
+            'refund_transaction_id' => $refundTransactionId,
+        ]);
+
+        $this->db->insert(db_prefix() . 'pos_payment_logs', [
+            'transaction_id' => $refundTransactionId,
+            'invoice_payment_id' => null,
+            'payment_type' => $refundType,
+            'amount' => -$refundAmount,
+            'card_brand' => null,
+            'card_auth_code' => null,
+            'card_last4' => null,
+            'created_at' => date('Y-m-d H:i:s'),
+        ]);
+
+        $this->reverse_loyalty_for_refund((int) $original['client_id'], (int) $original['id'], $refundTransactionId);
+
+        $this->json_response(true, 'Refund completed successfully.', [
+            'refund_id' => $refundId,
+            'refund_transaction_id' => $refundTransactionId,
+            'amount' => $refundAmount,
+            'warehouse_id' => (int) $warehouseId,
+        ]);
+    }
+
     private function add_item_to_cart($item, $qty)
     {
         $shift = $this->get_open_shift();
@@ -1224,6 +1375,201 @@ class Pos extends AdminController
             'created_by' => get_staff_user_id(),
             'created_at' => date('Y-m-d H:i:s'),
         ]);
+    }
+
+    private function increment_stock_for_refund($itemId, $qty, $originalTransactionId, $warehouseId)
+    {
+        if ($warehouseId < 1) {
+            $warehouseId = $this->get_active_warehouse_id();
+        }
+
+        $stock = $this->db
+            ->where('warehouse_id', $warehouseId)
+            ->where('item_id', $itemId)
+            ->get(db_prefix() . 'pos_storeroom_stock')
+            ->row_array();
+
+        if ($stock) {
+            $newQty = (float) $stock['qty_on_hand'] + $qty;
+
+            $this->db->where('id', $stock['id']);
+            $this->db->update(db_prefix() . 'pos_storeroom_stock', [
+                'qty_on_hand' => $newQty,
+                'updated_at' => date('Y-m-d H:i:s'),
+            ]);
+        } else {
+            $newQty = $qty;
+            $item = $this->db->where('id', $itemId)->get(db_prefix() . 'items')->row_array();
+
+            $this->db->insert(db_prefix() . 'pos_storeroom_stock', [
+                'warehouse_id' => $warehouseId,
+                'item_id' => $itemId,
+                'group_id' => isset($item['group_id']) ? (int) $item['group_id'] : 0,
+                'qty_on_hand' => $newQty,
+                'reorder_level' => 0,
+                'updated_at' => date('Y-m-d H:i:s'),
+            ]);
+        }
+
+        $this->db->insert(db_prefix() . 'pos_inventory_ledger', [
+            'warehouse_id' => $warehouseId,
+            'to_warehouse_id' => null,
+            'item_id' => $itemId,
+            'entry_type' => 'refund_return',
+            'qty_change' => $qty,
+            'qty_after' => $newQty,
+            'reason_code' => 'POS_REFUND',
+            'reference_type' => 'transaction',
+            'reference_id' => $originalTransactionId,
+            'notes' => 'Auto restock from POS refund',
+            'created_by' => get_staff_user_id(),
+            'created_at' => date('Y-m-d H:i:s'),
+        ]);
+    }
+
+    private function parse_refund_request_items($itemsJson)
+    {
+        $itemsJson = trim((string) $itemsJson);
+        if ($itemsJson === '') {
+            return [];
+        }
+
+        $decoded = json_decode($itemsJson, true);
+        if (!is_array($decoded)) {
+            return false;
+        }
+
+        $map = [];
+        foreach ($decoded as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $itemId = isset($row['item_id']) ? (int) $row['item_id'] : 0;
+            $qty = isset($row['qty']) ? (float) $row['qty'] : 0;
+
+            if ($itemId < 1 || $qty <= 0) {
+                continue;
+            }
+
+            if (!isset($map[$itemId])) {
+                $map[$itemId] = 0;
+            }
+
+            $map[$itemId] += $qty;
+        }
+
+        return $map;
+    }
+
+    private function build_refund_lines($originalTransactionId, $requestMap)
+    {
+        $sourceLines = $this->db
+            ->where('transaction_id', $originalTransactionId)
+            ->order_by('id', 'ASC')
+            ->get(db_prefix() . 'pos_transaction_items')
+            ->result_array();
+
+        if (empty($sourceLines)) {
+            return [];
+        }
+
+        $refundedRows = $this->db
+            ->select('ri.transaction_item_id, SUM(ri.qty) as refunded_qty', false)
+            ->from(db_prefix() . 'pos_refund_items as ri')
+            ->join(db_prefix() . 'pos_refunds as r', 'r.id = ri.refund_id', 'inner')
+            ->where('r.original_transaction_id', (int) $originalTransactionId)
+            ->where('r.status', 'completed')
+            ->group_by('ri.transaction_item_id')
+            ->get()
+            ->result_array();
+
+        $refundedMap = [];
+        foreach ($refundedRows as $r) {
+            $refundedMap[(int) $r['transaction_item_id']] = (float) $r['refunded_qty'];
+        }
+
+        $isPartialRequest = !empty($requestMap);
+        $lines = [];
+
+        foreach ($sourceLines as $line) {
+            $transactionItemId = (int) $line['id'];
+            $itemId = (int) $line['item_id'];
+            $soldQty = max(0, (float) $line['qty']);
+
+            if ($soldQty <= 0) {
+                continue;
+            }
+
+            $alreadyRefunded = isset($refundedMap[$transactionItemId]) ? max(0, (float) $refundedMap[$transactionItemId]) : 0;
+            $remaining = round(max(0, $soldQty - $alreadyRefunded), 4);
+
+            if ($remaining <= 0) {
+                continue;
+            }
+
+            if ($isPartialRequest && !isset($requestMap[$itemId])) {
+                continue;
+            }
+
+            $requestedQty = $isPartialRequest ? (float) $requestMap[$itemId] : $remaining;
+            $refundQty = min($remaining, max(0, $requestedQty));
+            if ($refundQty <= 0) {
+                continue;
+            }
+
+            $lineRate = $soldQty > 0 ? ((float) $line['line_total'] / $soldQty) : (float) $line['unit_price'];
+            $refundLineTotal = round($lineRate * $refundQty, 2);
+
+            $lines[] = [
+                'transaction_item_id' => $transactionItemId,
+                'item_id' => $itemId,
+                'qty' => $refundQty,
+                'unit_price' => (float) $line['unit_price'],
+                'line_total' => $refundLineTotal,
+            ];
+
+            if ($isPartialRequest) {
+                $requestMap[$itemId] = max(0, (float) $requestMap[$itemId] - $refundQty);
+            }
+        }
+
+        return $lines;
+    }
+
+    private function get_transaction_warehouse_id($transaction)
+    {
+        if (!isset($transaction['shift_id'])) {
+            return $this->get_active_warehouse_id();
+        }
+
+        $shift = $this->db
+            ->select('warehouse_id')
+            ->where('id', (int) $transaction['shift_id'])
+            ->get(db_prefix() . 'pos_shifts')
+            ->row_array();
+
+        if ($shift && isset($shift['warehouse_id']) && (int) $shift['warehouse_id'] > 0) {
+            return (int) $shift['warehouse_id'];
+        }
+
+        return $this->get_active_warehouse_id();
+    }
+
+    private function reverse_loyalty_for_refund($clientId, $originalTransactionId, $refundTransactionId)
+    {
+        $row = $this->db
+            ->select('SUM(points) as points_delta', false)
+            ->where('transaction_id', (int) $originalTransactionId)
+            ->get(db_prefix() . 'pos_loyalty_ledger')
+            ->row_array();
+
+        $pointsDelta = $row ? (int) $row['points_delta'] : 0;
+        if ($pointsDelta === 0) {
+            return;
+        }
+
+        $this->add_loyalty_entry((int) $clientId, (int) $refundTransactionId, 'refund_adjust', -$pointsDelta, 'Auto loyalty reversal from refund of transaction #' . (int) $originalTransactionId);
     }
 
     private function get_stock_map($warehouseId = null)

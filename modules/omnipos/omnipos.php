@@ -274,6 +274,37 @@ function omnipos_activation_hook()
             KEY `idx_transaction` (`transaction_id`)
         ) ENGINE=InnoDB DEFAULT CHARSET={$charset} COLLATE={$collate};",
 
+        "CREATE TABLE IF NOT EXISTS `" . db_prefix() . "pos_refunds` (
+            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `original_transaction_id` BIGINT UNSIGNED NOT NULL,
+            `refund_transaction_id` BIGINT UNSIGNED NULL,
+            `shift_id` BIGINT UNSIGNED NOT NULL,
+            `staff_id` INT UNSIGNED NOT NULL,
+            `refund_type` VARCHAR(20) NOT NULL DEFAULT 'cash',
+            `amount` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            `reason` VARCHAR(255) NULL,
+            `status` VARCHAR(20) NOT NULL DEFAULT 'completed',
+            `created_at` DATETIME NOT NULL,
+            PRIMARY KEY (`id`),
+            KEY `idx_original_transaction` (`original_transaction_id`),
+            KEY `idx_refund_transaction` (`refund_transaction_id`),
+            KEY `idx_shift` (`shift_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET={$charset} COLLATE={$collate};",
+
+        "CREATE TABLE IF NOT EXISTS `" . db_prefix() . "pos_refund_items` (
+            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `refund_id` BIGINT UNSIGNED NOT NULL,
+            `transaction_item_id` BIGINT UNSIGNED NOT NULL,
+            `item_id` INT UNSIGNED NOT NULL,
+            `qty` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            `unit_price` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            `line_total` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            PRIMARY KEY (`id`),
+            KEY `idx_refund` (`refund_id`),
+            KEY `idx_transaction_item` (`transaction_item_id`),
+            KEY `idx_item` (`item_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET={$charset} COLLATE={$collate};",
+
         "CREATE TABLE IF NOT EXISTS `" . db_prefix() . "pos_payment_logs` (
             `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
             `transaction_id` BIGINT UNSIGNED NOT NULL,
@@ -554,6 +585,41 @@ function omnipos_upgrade_schema()
             `unit_cost` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
             PRIMARY KEY (`id`),
             KEY `idx_po` (`purchase_order_id`),
+            KEY `idx_item` (`item_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci');
+    }
+
+    if (!$CI->db->table_exists($prefix . 'pos_refunds')) {
+        $CI->db->query('CREATE TABLE IF NOT EXISTS `' . $prefix . 'pos_refunds` (
+            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `original_transaction_id` BIGINT UNSIGNED NOT NULL,
+            `refund_transaction_id` BIGINT UNSIGNED NULL,
+            `shift_id` BIGINT UNSIGNED NOT NULL,
+            `staff_id` INT UNSIGNED NOT NULL,
+            `refund_type` VARCHAR(20) NOT NULL DEFAULT "cash",
+            `amount` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            `reason` VARCHAR(255) NULL,
+            `status` VARCHAR(20) NOT NULL DEFAULT "completed",
+            `created_at` DATETIME NOT NULL,
+            PRIMARY KEY (`id`),
+            KEY `idx_original_transaction` (`original_transaction_id`),
+            KEY `idx_refund_transaction` (`refund_transaction_id`),
+            KEY `idx_shift` (`shift_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci');
+    }
+
+    if (!$CI->db->table_exists($prefix . 'pos_refund_items')) {
+        $CI->db->query('CREATE TABLE IF NOT EXISTS `' . $prefix . 'pos_refund_items` (
+            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `refund_id` BIGINT UNSIGNED NOT NULL,
+            `transaction_item_id` BIGINT UNSIGNED NOT NULL,
+            `item_id` INT UNSIGNED NOT NULL,
+            `qty` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            `unit_price` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            `line_total` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            PRIMARY KEY (`id`),
+            KEY `idx_refund` (`refund_id`),
+            KEY `idx_transaction_item` (`transaction_item_id`),
             KEY `idx_item` (`item_id`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci');
     }
