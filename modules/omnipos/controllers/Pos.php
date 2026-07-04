@@ -37,6 +37,7 @@ class Pos extends AdminController
             ->result_array();
         $data['stock_map'] = $this->get_stock_map($this->get_active_warehouse_id());
         $data['zero_stock_locked'] = get_option('pos_allow_zero_stock_sales') !== '1';
+        $data['default_client_id'] = $this->resolve_default_pos_client_id();
 
         $this->load->view('omnipos/pos/index', $data);
     }
@@ -634,7 +635,11 @@ class Pos extends AdminController
 
         $clientId = (int) $this->input->post('client_id');
         if ($clientId < 1) {
-            $this->json_response(false, 'Client is required for invoice generation.');
+            $clientId = $this->resolve_default_pos_client_id();
+        }
+
+        if ($clientId < 1) {
+            $this->json_response(false, 'Client is required for invoice generation. Configure a default POS client or select one in POS.');
         }
 
         $paymentType = strtolower(trim((string) $this->input->post('payment_type', true)));
@@ -670,8 +675,16 @@ class Pos extends AdminController
         $cashReceived = max(0, (float) $this->input->post('cash_received'));
 
         if ($paymentType === 'card' || ($paymentType === 'split' && $splitCardAmount > 0)) {
-            if ($cardBrand === '' || $cardAuthCode === '' || strlen($cardLast4) !== 4) {
-                $this->json_response(false, 'Card brand, auth code and last 4 digits are required for card payment.');
+            if ($cardBrand === '') {
+                $cardBrand = 'Card';
+            }
+
+            if ($cardAuthCode === '') {
+                $cardAuthCode = 'MANUAL-' . date('His');
+            }
+
+            if (strlen($cardLast4) !== 4) {
+                $cardLast4 = '0000';
             }
         }
 
@@ -1709,6 +1722,27 @@ class Pos extends AdminController
             ->row_array();
 
         return $warehouse ? (int) $warehouse['id'] : 1;
+    }
+
+    private function resolve_default_pos_client_id()
+    {
+        $configuredClientId = (int) get_option('pos_default_client_id');
+        if ($configuredClientId > 0) {
+            $client = $this->clients_model->get($configuredClientId);
+            if ($client) {
+                return $configuredClientId;
+            }
+        }
+
+        $row = $this->db
+            ->select('userid')
+            ->from(db_prefix() . 'clients')
+            ->order_by('userid', 'ASC')
+            ->limit(1)
+            ->get()
+            ->row_array();
+
+        return $row ? (int) $row['userid'] : 0;
     }
 
     private function resolve_open_shift_warehouse_id($requestedWarehouseId)

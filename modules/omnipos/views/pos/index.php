@@ -85,7 +85,7 @@
                     <div id="omnipos-customer-panel" class="collapse omnipos-customer-panel">
                         <div class="form-group">
                             <label>Client ID</label>
-                            <input type="number" id="omnipos-client-id" class="form-control" placeholder="Customer ID">
+                            <input type="number" id="omnipos-client-id" class="form-control" placeholder="Customer ID" value="<?php echo (int) $default_client_id; ?>">
                         </div>
                         <div class="form-group">
                             <label>Points to Use</label>
@@ -131,15 +131,51 @@
                         <div class="omnipos-change">Change: <span id="omnipos-change-due">0.00</span></div>
                     </div>
 
-                    <button type="button" class="btn btn-primary btn-block omnipos-charge-btn" id="omnipos-pay-primary">Charge <span id="omnipos-charge-amount">0.00</span></button>
+                    <button type="button" class="btn btn-primary btn-block omnipos-charge-btn" id="omnipos-pay-primary">Pay Now <span id="omnipos-charge-amount">0.00</span></button>
+
+                    <div class="omnipos-pay-chooser hidden" id="omnipos-pay-chooser">
+                        <div class="omnipos-pay-methods" id="omnipos-pay-methods">
+                            <button type="button" class="btn btn-default omnipos-pay-method active" data-method="cash">Cash</button>
+                            <button type="button" class="btn btn-default omnipos-pay-method" data-method="card">Card</button>
+                            <button type="button" class="btn btn-default omnipos-pay-method" data-method="wallet">Wallet</button>
+                        </div>
+                        <div id="omnipos-pay-card-fields" class="omnipos-pay-fields hidden">
+                            <div class="form-group">
+                                <label>Card Scheme</label>
+                                <select id="omnipos-card-brand" class="form-control">
+                                    <?php foreach ($card_brands as $brand) { ?>
+                                        <option value="<?php echo e($brand); ?>"><?php echo e($brand); ?></option>
+                                    <?php } ?>
+                                </select>
+                            </div>
+                            <div class="row">
+                                <div class="col-xs-8">
+                                    <div class="form-group">
+                                        <label>Auth Code (optional)</label>
+                                        <input type="text" id="omnipos-card-auth" class="form-control" placeholder="Manual terminal ref">
+                                    </div>
+                                </div>
+                                <div class="col-xs-4">
+                                    <div class="form-group">
+                                        <label>Last 4</label>
+                                        <input type="text" id="omnipos-card-last4" class="form-control" maxlength="4" placeholder="0000">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div id="omnipos-pay-wallet-fields" class="omnipos-pay-fields hidden">
+                            <div class="form-group" style="margin-bottom:0;">
+                                <label>Wallet PIN</label>
+                                <input type="password" id="omnipos-wallet-pin" class="form-control" maxlength="4" placeholder="****">
+                            </div>
+                        </div>
+                        <button type="button" class="btn btn-success btn-block" id="omnipos-pay-confirm">Complete Payment</button>
+                    </div>
 
                     <div class="omnipos-secondary-actions">
                         <input type="text" class="form-control" id="omnipos-suspend-label" placeholder="Ticket label">
                         <button type="button" class="btn btn-default btn-block" id="omnipos-suspend-btn">Save ticket</button>
-                        <button type="button" class="btn btn-success btn-block" id="omnipos-checkout-cash">Checkout Cash</button>
-                        <button type="button" class="btn btn-info btn-block" id="omnipos-checkout-wallet">Checkout Wallet</button>
-                        <button type="button" class="btn btn-default btn-block" data-toggle="modal" data-target="#omniposCardModal" data-mode="card">Checkout Card</button>
-                        <button type="button" class="btn btn-default btn-block" data-toggle="modal" data-target="#omniposCardModal" data-mode="split">Split Tender</button>
+                        <button type="button" class="btn btn-default btn-block" id="omnipos-open-pay-chooser">Payment Methods</button>
                     </div>
                 </div>
             </div>
@@ -188,27 +224,6 @@
     </div>
 </div>
 
-<div class="modal fade" id="omniposWalletModal" tabindex="-1" role="dialog">
-    <div class="modal-dialog" role="document">
-        <div class="modal-content">
-            <div class="modal-header">
-                <button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>
-                <h4 class="modal-title">Wallet PIN Challenge</h4>
-            </div>
-            <div class="modal-body">
-                <div class="form-group">
-                    <label>Wallet PIN</label>
-                    <input type="password" id="omnipos-wallet-pin" class="form-control" maxlength="4" placeholder="****">
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-default" data-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-info" id="omnipos-confirm-wallet-checkout">Confirm Wallet Checkout</button>
-            </div>
-        </div>
-    </div>
-</div>
-
 <div class="modal fade" id="omniposLineModal" tabindex="-1" role="dialog">
     <div class="modal-dialog" role="document">
         <div class="modal-content">
@@ -246,62 +261,6 @@
             <div class="modal-footer">
                 <button type="button" class="btn btn-default" data-dismiss="modal">Cancel</button>
                 <button type="button" class="btn btn-primary" id="omnipos-save-line">Save Line</button>
-            </div>
-        </div>
-    </div>
-</div>
-
-<div class="modal fade" id="omniposCardModal" tabindex="-1" role="dialog">
-    <div class="modal-dialog" role="document">
-        <div class="modal-content">
-            <div class="modal-header">
-                <button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>
-                <h4 class="modal-title">Card / Split Payment Details</h4>
-            </div>
-            <div class="modal-body">
-                <input type="hidden" id="omnipos-checkout-mode" value="card">
-                <div class="row">
-                    <div class="col-md-6">
-                        <div class="form-group">
-                            <label>Card Scheme</label>
-                            <select id="omnipos-card-brand" class="form-control">
-                                <?php foreach ($card_brands as $brand) { ?>
-                                    <option value="<?php echo e($brand); ?>"><?php echo e($brand); ?></option>
-                                <?php } ?>
-                            </select>
-                        </div>
-                    </div>
-                    <div class="col-md-6">
-                        <div class="form-group">
-                            <label>Terminal Auth Code</label>
-                            <input type="text" id="omnipos-card-auth" class="form-control" placeholder="Required">
-                        </div>
-                    </div>
-                </div>
-                <div class="form-group">
-                    <label>Last 4 Digits</label>
-                    <input type="text" id="omnipos-card-last4" class="form-control" maxlength="4" placeholder="1234">
-                </div>
-                <div id="omnipos-split-fields" class="hidden">
-                    <div class="row">
-                        <div class="col-md-6">
-                            <div class="form-group">
-                                <label>Split Cash Amount</label>
-                                <input type="number" id="omnipos-split-cash" class="form-control" min="0" step="0.01" value="0">
-                            </div>
-                        </div>
-                        <div class="col-md-6">
-                            <div class="form-group">
-                                <label>Split Card Amount</label>
-                                <input type="number" id="omnipos-split-card" class="form-control" min="0" step="0.01" value="0">
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-default" data-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-primary" id="omnipos-confirm-checkout">Confirm Checkout</button>
             </div>
         </div>
     </div>
@@ -659,6 +618,30 @@
     border-color: var(--pos-primary);
 }
 
+.omnipos-pay-chooser {
+    border: 1px solid var(--pos-border);
+    border-radius: 10px;
+    padding: 8px;
+    background: #f8fbff;
+}
+
+.omnipos-pay-methods {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+    margin-bottom: 8px;
+}
+
+.omnipos-pay-method.active {
+    color: #1d4ed8;
+    border-color: #b8ccff;
+    background: #edf3ff;
+}
+
+.omnipos-pay-fields {
+    margin-bottom: 8px;
+}
+
 .omnipos-secondary-actions .btn,
 .omnipos-secondary-actions .form-control {
     margin-top: 6px;
@@ -736,6 +719,7 @@
     var currentPage = 1;
     var pageSize = 16;
     var lastTotals = { grand_total: 0 };
+    var selectedPaymentMethod = 'cash';
 
     function csrfPayload(payload) {
         payload = payload || {};
@@ -912,15 +896,10 @@
             cash_received: parseFloat($('#omnipos-cash-received').val() || '0')
         };
 
-        if (paymentType === 'card' || paymentType === 'split') {
+        if (paymentType === 'card') {
             payload.card_brand = $('#omnipos-card-brand').val();
             payload.card_auth_code = $('#omnipos-card-auth').val();
             payload.card_last4 = $('#omnipos-card-last4').val();
-        }
-
-        if (paymentType === 'split') {
-            payload.split_cash_amount = parseFloat($('#omnipos-split-cash').val() || '0');
-            payload.split_card_amount = parseFloat($('#omnipos-split-card').val() || '0');
         }
 
         if (paymentType === 'wallet') {
@@ -939,8 +918,16 @@
             }
             showMessage('Checkout complete. Invoice #' + res.data.invoice_id + ' | Change: ' + money(res.data.change_due), 'success');
             reloadCart();
-            $('#omniposCardModal').modal('hide');
+            $('#omnipos-pay-chooser').addClass('hidden');
         }, 'json');
+    }
+
+    function setPaymentMethod(method) {
+        selectedPaymentMethod = method;
+        $('#omnipos-pay-methods .omnipos-pay-method').removeClass('active');
+        $('#omnipos-pay-methods .omnipos-pay-method[data-method="' + method + '"]').addClass('active');
+        $('#omnipos-pay-card-fields').toggleClass('hidden', method !== 'card');
+        $('#omnipos-pay-wallet-fields').toggleClass('hidden', method !== 'wallet');
     }
 
     function applyWalletProfile(walletStaff, clientId) {
@@ -1162,39 +1149,20 @@
 
     $('#omnipos-cash-received').on('input', refreshChangeDue);
 
-    $('#omnipos-pay-primary, #omnipos-checkout-cash').on('click', function () {
-        checkout('cash');
+    $('#omnipos-pay-primary, #omnipos-open-pay-chooser').on('click', function () {
+        $('#omnipos-pay-chooser').toggleClass('hidden');
     });
 
-    $('#omnipos-checkout-wallet').on('click', function () {
-        if (!selectedWallet) {
+    $('#omnipos-pay-methods').on('click', '.omnipos-pay-method', function () {
+        setPaymentMethod($(this).data('method'));
+    });
+
+    $('#omnipos-pay-confirm').on('click', function () {
+        if (selectedPaymentMethod === 'wallet' && !selectedWallet) {
             showMessage('Lookup wallet staff profile first.', 'warning');
             return;
         }
-        $('#omnipos-wallet-pin').val('');
-        $('#omniposWalletModal').modal('show');
-    });
-
-    $('#omnipos-confirm-wallet-checkout').on('click', function () {
-        checkout('wallet');
-        $('#omniposWalletModal').modal('hide');
-    });
-
-    $('#omniposCardModal').on('show.bs.modal', function (event) {
-        var trigger = $(event.relatedTarget);
-        var mode = trigger.data('mode') || 'card';
-        $('#omnipos-checkout-mode').val(mode);
-        $('#omnipos-split-fields').toggleClass('hidden', mode !== 'split');
-
-        if (mode === 'split') {
-            var grand = parseFloat(lastTotals.grand_total || 0);
-            $('#omnipos-split-cash').val((grand / 2).toFixed(2));
-            $('#omnipos-split-card').val((grand - (grand / 2)).toFixed(2));
-        }
-    });
-
-    $('#omnipos-confirm-checkout').on('click', function () {
-        checkout($('#omnipos-checkout-mode').val());
+        checkout(selectedPaymentMethod);
     });
 
     $('#omnipos-toggle-fullscreen').on('click', toggleFullscreen);
@@ -1221,6 +1189,7 @@
 
     reloadCart();
     $('#omnipos-category-chips').hide();
+    setPaymentMethod('cash');
     renderGridPage();
 })();
 </script>
