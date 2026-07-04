@@ -15,6 +15,9 @@
                             <span class="omnipos-shift-time"><?php echo date('D d M Y'); ?></span>
                         </div>
                         <div class="omnipos-header-actions">
+                            <?php if (!$current_shift) { ?>
+                                <button type="button" class="btn btn-warning btn-sm" id="omnipos-quick-open-shift">Open Shift</button>
+                            <?php } ?>
                             <a href="<?php echo admin_url('omnipos/pos/shifts'); ?>" class="btn btn-default btn-sm">Shift & Returns</a>
                             <button type="button" class="btn btn-primary btn-sm" id="omnipos-toggle-fullscreen">Full Screen</button>
                         </div>
@@ -862,14 +865,63 @@
         }, 'json');
     }
 
-    function addItem(itemId, qty) {
+    function quickOpenShift(callback) {
+        $.post(ajaxBase + 'omnipos/pos/open_shift', csrfPayload({
+            register_key: '',
+            opening_float: 0,
+            warehouse_id: 0
+        }), function (res) {
+            if (!res || !res.success) {
+                showMessage(res && res.message ? res.message : 'Unable to open shift.', 'warning');
+                if (typeof callback === 'function') {
+                    callback(false);
+                }
+                return;
+            }
+
+            showMessage('Shift opened. You can continue selling now.', 'success');
+            $('.omnipos-shift-pill').removeClass('omnipos-shift-closed').addClass('omnipos-shift-open').text('Open Shift');
+            $('#omnipos-quick-open-shift').remove();
+
+            if (typeof callback === 'function') {
+                callback(true);
+            }
+        }, 'json').fail(function () {
+            showMessage('Unable to open shift. Check network and try again.', 'warning');
+            if (typeof callback === 'function') {
+                callback(false);
+            }
+        });
+    }
+
+    function addItem(itemId, qty, didRetryAfterOpenShift) {
         $.post(ajaxBase + 'omnipos/pos/add_item', csrfPayload({ item_id: itemId, qty: qty || 1 }), function (res) {
             if (!res || !res.success) {
-                showMessage(res && res.message ? res.message : 'Add failed', 'warning');
+                var msg = res && res.message ? res.message : 'Add failed';
+                if (!didRetryAfterOpenShift && /open a shift/i.test(msg)) {
+                    quickOpenShift(function (ok) {
+                        if (ok) {
+                            addItem(itemId, qty, true);
+                        }
+                    });
+                    return;
+                }
+                showMessage(msg, 'warning');
                 return;
             }
             renderCart(res.data.cart_items, res.data.cart, res.data.totals);
-        }, 'json');
+        }, 'json').fail(function (xhr) {
+            var msg = 'Add failed (' + (xhr && xhr.status ? xhr.status : 'network') + ').';
+            if (xhr && xhr.responseText && typeof xhr.responseText === 'string' && /open a shift/i.test(xhr.responseText) && !didRetryAfterOpenShift) {
+                quickOpenShift(function (ok) {
+                    if (ok) {
+                        addItem(itemId, qty, true);
+                    }
+                });
+                return;
+            }
+            showMessage(msg, 'warning');
+        });
     }
 
     function adjustLineQty(lineId, delta) {
@@ -1082,6 +1134,12 @@
             e.preventDefault();
             $('#omnipos-wallet-lookup-btn').click();
         }
+    });
+
+    $('#omnipos-quick-open-shift').on('click', function () {
+        quickOpenShift(function () {
+            reloadCart();
+        });
     });
 
     $('#omnipos-mode-tabs').on('click', '.omnipos-mode-tab', function (e) {
