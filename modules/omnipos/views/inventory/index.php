@@ -126,6 +126,26 @@
                         </form>
                     </div>
                 </div>
+
+                <div class="panel_s">
+                    <div class="panel-body">
+                        <h5>CSV Import / Export</h5>
+                        <p class="text-muted">Use template columns exactly: warehouse_code, item_name, unit, price, qty_on_hand, reorder_level, group_name.</p>
+                        <a href="<?php echo admin_url('omnipos/inventory/download_import_template'); ?>" class="btn btn-default btn-sm">Download Template</a>
+                        <a href="<?php echo admin_url('omnipos/inventory/export_stock_csv'); ?>" class="btn btn-info btn-sm">Export Stock CSV</a>
+
+                        <hr>
+
+                        <form method="post" action="<?php echo admin_url('omnipos/inventory/import_stock_csv'); ?>" enctype="multipart/form-data">
+                            <input type="hidden" name="<?php echo e($csrfName); ?>" value="<?php echo e($csrfHash); ?>">
+                            <div class="form-group">
+                                <label>Import CSV File</label>
+                                <input type="file" name="stock_csv" accept=".csv,text/csv" class="form-control" required>
+                            </div>
+                            <button type="submit" class="btn btn-primary">Import CSV</button>
+                        </form>
+                    </div>
+                </div>
             </div>
 
             <div class="col-md-8">

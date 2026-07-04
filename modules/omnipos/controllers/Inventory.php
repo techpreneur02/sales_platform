@@ -331,6 +331,189 @@ class Inventory extends AdminController
         redirect(admin_url('omnipos/inventory'));
     }
 
+    public function export_stock_csv()
+    {
+        $rows = $this->db
+            ->select('s.warehouse_id, w.code as warehouse_code, w.name as warehouse_name, s.item_id, i.description as item_name, i.unit, i.rate as price, s.qty_on_hand, s.reorder_level, g.name as group_name')
+            ->from(db_prefix() . 'pos_storeroom_stock as s')
+            ->join(db_prefix() . 'pos_warehouses as w', 'w.id = s.warehouse_id', 'left')
+            ->join(db_prefix() . 'items as i', 'i.id = s.item_id', 'left')
+            ->join(db_prefix() . 'items_groups as g', 'g.id = i.group_id', 'left')
+            ->order_by('w.name', 'ASC')
+            ->order_by('i.description', 'ASC')
+            ->get()
+            ->result_array();
+
+        $filename = 'omnipos_stock_export_' . date('Ymd_His') . '.csv';
+        header('Content-Type: text/csv; charset=utf-8');
+        header('Content-Disposition: attachment; filename=' . $filename);
+
+        $out = fopen('php://output', 'w');
+        fputcsv($out, ['warehouse_code', 'warehouse_name', 'item_id', 'item_name', 'unit', 'price', 'qty_on_hand', 'reorder_level', 'group_name']);
+
+        foreach ($rows as $row) {
+            fputcsv($out, [
+                $row['warehouse_code'],
+                $row['warehouse_name'],
+                $row['item_id'],
+                $row['item_name'],
+                $row['unit'],
+                number_format((float) $row['price'], 2, '.', ''),
+                number_format((float) $row['qty_on_hand'], 2, '.', ''),
+                number_format((float) $row['reorder_level'], 2, '.', ''),
+                $row['group_name'],
+            ]);
+        }
+
+        fclose($out);
+        exit;
+    }
+
+    public function download_import_template()
+    {
+        $filename = 'omnipos_stock_import_template.csv';
+        header('Content-Type: text/csv; charset=utf-8');
+        header('Content-Disposition: attachment; filename=' . $filename);
+
+        $out = fopen('php://output', 'w');
+        fputcsv($out, ['warehouse_code', 'item_name', 'unit', 'price', 'qty_on_hand', 'reorder_level', 'group_name']);
+        fputcsv($out, ['MAIN', 'Demo Espresso Beans 1kg', 'bag', '18.50', '25', '6', 'OmniPOS Inventory']);
+        fputcsv($out, ['MAIN', 'Demo Milk Full Cream 1L', 'pack', '1.95', '120', '20', 'OmniPOS Inventory']);
+        fputcsv($out, ['MAIN', 'Demo Paper Cup 12oz', 'box', '7.25', '40', '8', 'OmniPOS Inventory']);
+        fclose($out);
+        exit;
+    }
+
+    public function import_stock_csv()
+    {
+        if (!isset($_FILES['stock_csv']) || !isset($_FILES['stock_csv']['tmp_name']) || $_FILES['stock_csv']['tmp_name'] === '') {
+            set_alert('warning', 'Please upload a CSV file first.');
+            redirect(admin_url('omnipos/inventory'));
+        }
+
+        $tmpPath = $_FILES['stock_csv']['tmp_name'];
+        $fileName = isset($_FILES['stock_csv']['name']) ? (string) $_FILES['stock_csv']['name'] : '';
+
+        if (strtolower(pathinfo($fileName, PATHINFO_EXTENSION)) !== 'csv') {
+            set_alert('warning', 'Invalid file type. Upload a .csv file.');
+            redirect(admin_url('omnipos/inventory'));
+        }
+
+        $handle = fopen($tmpPath, 'r');
+        if (!$handle) {
+            set_alert('warning', 'Unable to read uploaded CSV file.');
+            redirect(admin_url('omnipos/inventory'));
+        }
+
+        $header = fgetcsv($handle);
+        if (!$header || count($header) < 7) {
+            fclose($handle);
+            set_alert('warning', 'Invalid CSV header. Use the import template.');
+            redirect(admin_url('omnipos/inventory'));
+        }
+
+        $headerMap = [];
+        foreach ($header as $idx => $name) {
+            $headerMap[strtolower(trim((string) $name))] = $idx;
+        }
+
+        $required = ['warehouse_code', 'item_name', 'unit', 'price', 'qty_on_hand', 'reorder_level', 'group_name'];
+        foreach ($required as $column) {
+            if (!array_key_exists($column, $headerMap)) {
+                fclose($handle);
+                set_alert('warning', 'Missing required CSV column: ' . $column);
+                redirect(admin_url('omnipos/inventory'));
+            }
+        }
+
+        $imported = 0;
+        $skipped = 0;
+        $lineNo = 1;
+
+        while (($row = fgetcsv($handle)) !== false) {
+            $lineNo++;
+            if (!is_array($row) || count($row) === 0) {
+                continue;
+            }
+
+            $warehouseCode = strtoupper(trim((string) $row[$headerMap['warehouse_code']]));
+            $itemName = trim((string) $row[$headerMap['item_name']]);
+            $unit = trim((string) $row[$headerMap['unit']]);
+            $price = (float) $row[$headerMap['price']];
+            $qty = (float) $row[$headerMap['qty_on_hand']];
+            $reorderLevel = (float) $row[$headerMap['reorder_level']];
+            $groupName = trim((string) $row[$headerMap['group_name']]);
+
+            if ($warehouseCode === '' || $itemName === '') {
+                $skipped++;
+                continue;
+            }
+
+            $warehouse = $this->db
+                ->where('code', $warehouseCode)
+                ->where('is_active', 1)
+                ->get(db_prefix() . 'pos_warehouses')
+                ->row_array();
+
+            if (!$warehouse) {
+                $skipped++;
+                continue;
+            }
+
+            if ($groupName === '') {
+                $groupName = 'OmniPOS Inventory';
+            }
+
+            $groupId = $this->ensure_group($groupName);
+            $itemId = $this->ensure_item($itemName, $unit, $price, $groupId);
+
+            $stock = $this->db
+                ->where('warehouse_id', (int) $warehouse['id'])
+                ->where('item_id', $itemId)
+                ->get(db_prefix() . 'pos_storeroom_stock')
+                ->row_array();
+
+            $newQty = max(0, $qty);
+            $oldQty = $stock ? (float) $stock['qty_on_hand'] : 0.0;
+
+            if ($stock) {
+                $this->db->where('id', $stock['id']);
+                $this->db->update(db_prefix() . 'pos_storeroom_stock', [
+                    'group_id' => $groupId,
+                    'qty_on_hand' => $newQty,
+                    'reorder_level' => max(0, $reorderLevel),
+                    'updated_at' => date('Y-m-d H:i:s'),
+                ]);
+            } else {
+                $this->db->insert(db_prefix() . 'pos_storeroom_stock', [
+                    'warehouse_id' => (int) $warehouse['id'],
+                    'item_id' => $itemId,
+                    'group_id' => $groupId,
+                    'qty_on_hand' => $newQty,
+                    'reorder_level' => max(0, $reorderLevel),
+                    'updated_at' => date('Y-m-d H:i:s'),
+                ]);
+            }
+
+            $delta = $newQty - $oldQty;
+            if ($delta != 0.0) {
+                $this->insert_ledger((int) $warehouse['id'], null, $itemId, 'import_adjust', $delta, $newQty, 'csv_import', 'import', 0, 'CSV stock import adjustment line ' . $lineNo . '.');
+            }
+
+            $imported++;
+        }
+
+        fclose($handle);
+
+        if ($imported === 0) {
+            set_alert('warning', 'No rows imported. Check warehouse codes and required columns. Skipped rows: ' . $skipped);
+            redirect(admin_url('omnipos/inventory'));
+        }
+
+        set_alert('success', 'CSV import completed. Imported rows: ' . $imported . '. Skipped rows: ' . $skipped . '.');
+        redirect(admin_url('omnipos/inventory'));
+    }
+
     private function ensure_sample_group()
     {
         $group = $this->db->where('name', 'OmniPOS Samples')->get(db_prefix() . 'items_groups')->row_array();
@@ -339,6 +522,52 @@ class Inventory extends AdminController
         }
 
         $this->db->insert(db_prefix() . 'items_groups', ['name' => 'OmniPOS Samples']);
+
+        return (int) $this->db->insert_id();
+    }
+
+    private function ensure_group($name)
+    {
+        $group = $this->db->where('name', $name)->get(db_prefix() . 'items_groups')->row_array();
+        if ($group) {
+            return (int) $group['id'];
+        }
+
+        $this->db->insert(db_prefix() . 'items_groups', ['name' => $name]);
+
+        return (int) $this->db->insert_id();
+    }
+
+    private function ensure_item($name, $unit, $price, $groupId)
+    {
+        $item = $this->db
+            ->where('description', $name)
+            ->get(db_prefix() . 'items')
+            ->row_array();
+
+        $normalizedUnit = $unit !== '' ? $unit : 'pcs';
+        $normalizedPrice = max(0, (float) $price);
+
+        if ($item) {
+            $this->db->where('id', (int) $item['id']);
+            $this->db->update(db_prefix() . 'items', [
+                'unit' => $normalizedUnit,
+                'rate' => $normalizedPrice,
+                'group_id' => $groupId,
+            ]);
+
+            return (int) $item['id'];
+        }
+
+        $this->db->insert(db_prefix() . 'items', [
+            'description' => $name,
+            'long_description' => 'Imported by OmniPOS CSV inventory importer',
+            'rate' => $normalizedPrice,
+            'tax' => null,
+            'tax2' => null,
+            'group_id' => $groupId,
+            'unit' => $normalizedUnit,
+        ]);
 
         return (int) $this->db->insert_id();
     }

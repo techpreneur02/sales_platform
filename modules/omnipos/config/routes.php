@@ -11,3 +11,8 @@ $route['omnipos/wallet/pin/(:num)'] = 'omnipos/set_staff_pin/$1';
 $route['omnipos/wallet/toggle/(:num)'] = 'omnipos/toggle_staff_status/$1';
 $route['omnipos/wallet/code/(:num)'] = 'omnipos/staff_code/$1';
 $route['omnipos/wallet/export-ledger'] = 'omnipos/ledger_export';
+
+$route['omnipos/inventory'] = 'inventory/index';
+$route['omnipos/inventory/export-stock'] = 'inventory/export_stock_csv';
+$route['omnipos/inventory/import-template'] = 'inventory/download_import_template';
+$route['omnipos/inventory/import-stock'] = 'inventory/import_stock_csv';
