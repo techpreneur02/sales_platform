@@ -711,8 +711,22 @@
 
 <?php init_tail(); ?>
 <script>
-(function () {
+(function bootstrapOmniPos(retryCount) {
+    retryCount = retryCount || 0;
+
+    if (typeof window.jQuery === 'undefined' || typeof window.admin_url !== 'string') {
+        if (retryCount < 100) {
+            setTimeout(function () {
+                bootstrapOmniPos(retryCount + 1);
+            }, 50);
+        }
+        return;
+    }
+
+    var $ = window.jQuery;
     'use strict';
+
+    var ajaxBase = window.admin_url;
 
     var selectedWallet = null;
     var currentCategory = 'all';
@@ -840,7 +854,7 @@
     }
 
     function reloadCart() {
-        $.get(admin_url + 'omnipos/pos/cart', function (res) {
+        $.get(ajaxBase + 'omnipos/pos/cart', function (res) {
             if (!res || !res.success) {
                 return;
             }
@@ -849,7 +863,7 @@
     }
 
     function addItem(itemId, qty) {
-        $.post(admin_url + 'omnipos/pos/add_item', csrfPayload({ item_id: itemId, qty: qty || 1 }), function (res) {
+        $.post(ajaxBase + 'omnipos/pos/add_item', csrfPayload({ item_id: itemId, qty: qty || 1 }), function (res) {
             if (!res || !res.success) {
                 showMessage(res && res.message ? res.message : 'Add failed', 'warning');
                 return;
@@ -867,7 +881,7 @@
         var currentQty = parseFloat(btn.data('line-qty') || '0');
         var targetQty = Math.max(0.01, currentQty + delta);
 
-        $.post(admin_url + 'omnipos/pos/update_line_item', csrfPayload({
+        $.post(ajaxBase + 'omnipos/pos/update_line_item', csrfPayload({
             line_id: lineId,
             qty: targetQty,
             discount_type: btn.data('line-discount-type') || '',
@@ -912,7 +926,7 @@
             payload.wallet_pin = $('#omnipos-wallet-pin').val();
         }
 
-        $.post(admin_url + 'omnipos/pos/checkout', csrfPayload(payload), function (res) {
+        $.post(ajaxBase + 'omnipos/pos/checkout', csrfPayload(payload), function (res) {
             if (!res || !res.success) {
                 showMessage(res && res.message ? res.message : 'Checkout failed', 'danger');
                 return;
@@ -944,7 +958,7 @@
     }
 
     function lookupWallet(barcode) {
-        $.post(admin_url + 'omnipos/pos/wallet_lookup', csrfPayload({ barcode: barcode }), function (res) {
+        $.post(ajaxBase + 'omnipos/pos/wallet_lookup', csrfPayload({ barcode: barcode }), function (res) {
             if (!res || !res.success) {
                 showMessage(res && res.message ? res.message : 'Wallet lookup failed', 'warning');
                 return;
@@ -1025,7 +1039,7 @@
         }
 
         searchTimer = setTimeout(function () {
-            $.get(admin_url + 'omnipos/pos/search_items', { q: q }, function (res) {
+            $.get(ajaxBase + 'omnipos/pos/search_items', { q: q }, function (res) {
                 if (!res || !res.success) {
                     return;
                 }
@@ -1111,7 +1125,7 @@
     });
 
     $('#omnipos-apply-adjustments').on('click', function () {
-        $.post(admin_url + 'omnipos/pos/update_cart_adjustments', csrfPayload({
+        $.post(ajaxBase + 'omnipos/pos/update_cart_adjustments', csrfPayload({
             discount_type: $('#omnipos-global-discount-type').val(),
             discount_value: $('#omnipos-global-discount-value').val(),
             service_charge: $('#omnipos-service-charge').val()
@@ -1144,7 +1158,7 @@
     });
 
     $('#omnipos-save-line').on('click', function () {
-        $.post(admin_url + 'omnipos/pos/update_line_item', csrfPayload({
+        $.post(ajaxBase + 'omnipos/pos/update_line_item', csrfPayload({
             line_id: $('#omnipos-line-id').val(),
             qty: $('#omnipos-line-qty').val(),
             discount_type: $('#omnipos-line-discount-type').val(),
@@ -1162,7 +1176,7 @@
     });
 
     $('#omnipos-suspend-btn').on('click', function () {
-        $.post(admin_url + 'omnipos/pos/suspend_cart', csrfPayload({ label: $('#omnipos-suspend-label').val() }), function (res) {
+        $.post(ajaxBase + 'omnipos/pos/suspend_cart', csrfPayload({ label: $('#omnipos-suspend-label').val() }), function (res) {
             showMessage(res.message, res.success ? 'success' : 'warning');
             if (res.success) {
                 setTimeout(function () { window.location.reload(); }, 500); }
@@ -1213,5 +1227,5 @@
     $('#omnipos-category-chips').show();
     setPaymentMethod('cash');
     renderGridPage();
-})();
+})(0);
 </script>
