@@ -182,6 +182,16 @@
                     <div class="panel-body">
                         <h5>Shift Controls</h5>
                         <div class="form-group">
+                            <label>Active Warehouse</label>
+                            <select class="form-control" id="omnipos-warehouse-id">
+                                <?php foreach ($warehouses as $w) { ?>
+                                    <option value="<?php echo (int) $w['id']; ?>" <?php echo (isset($current_shift['warehouse_id']) && (int) $current_shift['warehouse_id'] === (int) $w['id']) ? 'selected' : ''; ?>>
+                                        <?php echo e($w['name']); ?> (<?php echo e($w['code']); ?>)
+                                    </option>
+                                <?php } ?>
+                            </select>
+                        </div>
+                        <div class="form-group">
                             <label>Register Key</label>
                             <input type="text" class="form-control" id="omnipos-register-key" value="<?php echo e(get_option('pos_default_register')); ?>">
                         </div>
@@ -730,7 +740,8 @@
     $('#omnipos-open-shift').on('click', function () {
         $.post(admin_url + 'omnipos/pos/open_shift', csrfPayload({
             register_key: $('#omnipos-register-key').val(),
-            opening_float: $('#omnipos-opening-float').val()
+            opening_float: $('#omnipos-opening-float').val(),
+            warehouse_id: $('#omnipos-warehouse-id').val()
         }), function (res) {
             showMessage(res.message, res.success ? 'success' : 'warning');
             if (res.success) {

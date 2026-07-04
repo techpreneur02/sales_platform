@@ -26,13 +26,14 @@ class Pos extends AdminController
         $data['cart'] = $this->get_active_cart();
         $data['cart_items'] = $this->get_active_cart_items();
         $data['current_shift'] = $this->get_open_shift();
+        $data['warehouses'] = $this->db->where('is_active', 1)->order_by('name', 'ASC')->get(db_prefix() . 'pos_warehouses')->result_array();
         $data['suspended_carts'] = $this->db
             ->where('staff_id', get_staff_user_id())
             ->where('status', 'suspended')
             ->order_by('id', 'DESC')
             ->get(db_prefix() . 'pos_suspended_carts')
             ->result_array();
-        $data['stock_map'] = $this->get_stock_map();
+        $data['stock_map'] = $this->get_stock_map($this->get_active_warehouse_id());
         $data['zero_stock_locked'] = get_option('pos_allow_zero_stock_sales') !== '1';
 
         $this->load->view('omnipos/pos/index', $data);
@@ -102,7 +103,7 @@ class Pos extends AdminController
         $this->db->limit(40);
 
         $rows = $this->db->get()->result_array();
-        $stockMap = $this->get_stock_map();
+        $stockMap = $this->get_stock_map($this->get_active_warehouse_id());
 
         foreach ($rows as &$row) {
             $itemId = (int) $row['itemid'];
@@ -295,6 +296,21 @@ class Pos extends AdminController
         }
 
         $openingFloat = (float) $this->input->post('opening_float');
+        $warehouseId = (int) $this->input->post('warehouse_id');
+
+        if ($warehouseId < 1) {
+            $warehouseId = (int) get_option('pos_default_warehouse_id');
+        }
+
+        $warehouse = $this->db
+            ->where('id', $warehouseId)
+            ->where('is_active', 1)
+            ->get(db_prefix() . 'pos_warehouses')
+            ->row_array();
+
+        if (!$warehouse) {
+            $this->json_response(false, 'A valid active warehouse must be selected.');
+        }
 
         $existing = $this->get_open_shift();
         if ($existing) {
@@ -306,6 +322,7 @@ class Pos extends AdminController
         $insertData = [
             'staff_id'       => get_staff_user_id(),
             'register_key'   => $registerKey,
+            'warehouse_id'   => $warehouseId,
             'opening_float'  => $openingFloat,
             'opened_at'      => date('Y-m-d H:i:s'),
             'status'         => 'open',
@@ -315,6 +332,7 @@ class Pos extends AdminController
 
         $this->json_response(true, 'Shift opened successfully.', [
             'shift_id' => (int) $this->db->insert_id(),
+            'warehouse_id' => $warehouseId,
         ]);
     }
 
@@ -784,7 +802,7 @@ class Pos extends AdminController
                 'line_total'     => $item['line_total'],
             ]);
 
-            $this->decrement_stock_for_sale((int) $item['item_id'], (float) $item['qty'], $transactionId);
+            $this->decrement_stock_for_sale((int) $item['item_id'], (float) $item['qty'], $transactionId, (int) $shift['warehouse_id']);
         }
 
         $paymentEntries = [];
@@ -1160,9 +1178,14 @@ class Pos extends AdminController
         ];
     }
 
-    private function decrement_stock_for_sale($itemId, $qty, $transactionId)
+    private function decrement_stock_for_sale($itemId, $qty, $transactionId, $warehouseId)
     {
+        if ($warehouseId < 1) {
+            $warehouseId = 1;
+        }
+
         $stock = $this->db
+            ->where('warehouse_id', $warehouseId)
             ->where('item_id', $itemId)
             ->get(db_prefix() . 'pos_storeroom_stock')
             ->row_array();
@@ -1178,6 +1201,7 @@ class Pos extends AdminController
         } else {
             $newQty = -$qty;
             $this->db->insert(db_prefix() . 'pos_storeroom_stock', [
+                'warehouse_id' => $warehouseId,
                 'item_id' => $itemId,
                 'group_id' => 0,
                 'qty_on_hand' => $newQty,
@@ -1187,10 +1211,13 @@ class Pos extends AdminController
         }
 
         $this->db->insert(db_prefix() . 'pos_inventory_ledger', [
+            'warehouse_id' => $warehouseId,
+            'to_warehouse_id' => null,
             'item_id' => $itemId,
             'entry_type' => 'sale',
             'qty_change' => -$qty,
             'qty_after' => $newQty,
+            'reason_code' => 'POS_SALE',
             'reference_type' => 'transaction',
             'reference_id' => $transactionId,
             'notes' => 'Auto decrement from POS sale',
@@ -1199,10 +1226,15 @@ class Pos extends AdminController
         ]);
     }
 
-    private function get_stock_map()
+    private function get_stock_map($warehouseId = null)
     {
+        if ($warehouseId === null || (int) $warehouseId < 1) {
+            $warehouseId = $this->get_active_warehouse_id();
+        }
+
         $rows = $this->db
             ->select('item_id, qty_on_hand')
+            ->where('warehouse_id', (int) $warehouseId)
             ->get(db_prefix() . 'pos_storeroom_stock')
             ->result_array();
 
@@ -1225,8 +1257,11 @@ class Pos extends AdminController
             return true;
         }
 
+        $warehouseId = $this->get_active_warehouse_id();
+
         $stock = $this->db
             ->select('qty_on_hand')
+            ->where('warehouse_id', $warehouseId)
             ->where('item_id', $itemId)
             ->get(db_prefix() . 'pos_storeroom_stock')
             ->row_array();
@@ -1234,6 +1269,27 @@ class Pos extends AdminController
         $qtyOnHand = $stock ? (float) $stock['qty_on_hand'] : 0;
 
         return $qtyOnHand >= (float) $targetQty;
+    }
+
+    private function get_active_warehouse_id()
+    {
+        $shift = $this->get_open_shift();
+        if ($shift && isset($shift['warehouse_id']) && (int) $shift['warehouse_id'] > 0) {
+            return (int) $shift['warehouse_id'];
+        }
+
+        $defaultId = (int) get_option('pos_default_warehouse_id');
+        if ($defaultId > 0) {
+            return $defaultId;
+        }
+
+        $warehouse = $this->db
+            ->where('is_active', 1)
+            ->order_by('id', 'ASC')
+            ->get(db_prefix() . 'pos_warehouses')
+            ->row_array();
+
+        return $warehouse ? (int) $warehouse['id'] : 1;
     }
 
     private function get_wallet_staff_by_barcode($barcode)

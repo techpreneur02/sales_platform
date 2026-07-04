@@ -55,6 +55,13 @@ function omnipos_admin_init_menu()
         'href'     => admin_url('omnipos/pos/shifts'),
         'position' => 10,
     ]);
+
+    $CI->app_menu->add_sidebar_children_item('omnipos', [
+        'slug'     => 'omnipos-inventory',
+        'name'     => 'Inventory',
+        'href'     => admin_url('omnipos/inventory'),
+        'position' => 15,
+    ]);
 }
 
 function omnipos_inject_scanner_asset()
@@ -115,6 +122,7 @@ function omnipos_activation_hook()
             `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
             `staff_id` INT UNSIGNED NOT NULL,
             `register_key` VARCHAR(100) NOT NULL,
+            `warehouse_id` BIGINT UNSIGNED NULL,
             `opening_float` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
             `opened_at` DATETIME NOT NULL,
             `closed_at` DATETIME NULL,
@@ -129,6 +137,44 @@ function omnipos_activation_hook()
             PRIMARY KEY (`id`),
             KEY `idx_staff_status` (`staff_id`, `status`),
             KEY `idx_register_status` (`register_key`, `status`)
+        ) ENGINE=InnoDB DEFAULT CHARSET={$charset} COLLATE={$collate};",
+
+        "CREATE TABLE IF NOT EXISTS `" . db_prefix() . "pos_warehouses` (
+            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `name` VARCHAR(191) NOT NULL,
+            `code` VARCHAR(50) NOT NULL,
+            `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+            `created_at` DATETIME NOT NULL,
+            `updated_at` DATETIME NOT NULL,
+            PRIMARY KEY (`id`),
+            UNIQUE KEY `uniq_code` (`code`)
+        ) ENGINE=InnoDB DEFAULT CHARSET={$charset} COLLATE={$collate};",
+
+        "CREATE TABLE IF NOT EXISTS `" . db_prefix() . "pos_purchase_orders` (
+            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `warehouse_id` BIGINT UNSIGNED NOT NULL,
+            `supplier_name` VARCHAR(191) NOT NULL,
+            `reference_no` VARCHAR(100) NOT NULL,
+            `status` VARCHAR(30) NOT NULL DEFAULT 'draft',
+            `expected_at` DATE NULL,
+            `received_at` DATETIME NULL,
+            `notes` TEXT NULL,
+            `created_by` INT UNSIGNED NULL,
+            `created_at` DATETIME NOT NULL,
+            PRIMARY KEY (`id`),
+            KEY `idx_warehouse` (`warehouse_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET={$charset} COLLATE={$collate};",
+
+        "CREATE TABLE IF NOT EXISTS `" . db_prefix() . "pos_purchase_order_items` (
+            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `purchase_order_id` BIGINT UNSIGNED NOT NULL,
+            `item_id` INT UNSIGNED NOT NULL,
+            `expected_qty` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            `received_qty` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            `unit_cost` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            PRIMARY KEY (`id`),
+            KEY `idx_po` (`purchase_order_id`),
+            KEY `idx_item` (`item_id`)
         ) ENGINE=InnoDB DEFAULT CHARSET={$charset} COLLATE={$collate};",
 
         "CREATE TABLE IF NOT EXISTS `" . db_prefix() . "pos_shift_blind_counts` (
@@ -333,26 +379,32 @@ function omnipos_activation_hook()
 
         "CREATE TABLE IF NOT EXISTS `" . db_prefix() . "pos_storeroom_stock` (
             `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `warehouse_id` BIGINT UNSIGNED NOT NULL DEFAULT 1,
             `item_id` INT UNSIGNED NOT NULL,
             `qty_on_hand` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
             `reorder_level` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
             `updated_at` DATETIME NOT NULL,
             PRIMARY KEY (`id`),
-            UNIQUE KEY `uniq_item` (`item_id`)
+            UNIQUE KEY `uniq_warehouse_item` (`warehouse_id`, `item_id`),
+            KEY `idx_warehouse` (`warehouse_id`)
         ) ENGINE=InnoDB DEFAULT CHARSET={$charset} COLLATE={$collate};",
 
         "CREATE TABLE IF NOT EXISTS `" . db_prefix() . "pos_inventory_ledger` (
             `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `warehouse_id` BIGINT UNSIGNED NOT NULL DEFAULT 1,
+            `to_warehouse_id` BIGINT UNSIGNED NULL,
             `item_id` INT UNSIGNED NOT NULL,
             `entry_type` VARCHAR(30) NOT NULL,
             `qty_change` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
             `qty_after` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            `reason_code` VARCHAR(50) NULL,
             `reference_type` VARCHAR(30) NULL,
             `reference_id` BIGINT UNSIGNED NULL,
             `notes` TEXT NULL,
             `created_by` INT UNSIGNED NULL,
             `created_at` DATETIME NOT NULL,
             PRIMARY KEY (`id`),
+            KEY `idx_warehouse` (`warehouse_id`),
             KEY `idx_item` (`item_id`),
             KEY `idx_ref` (`reference_type`, `reference_id`)
         ) ENGINE=InnoDB DEFAULT CHARSET={$charset} COLLATE={$collate};"
@@ -369,6 +421,17 @@ function omnipos_activation_hook()
             'earn_rate'  => 1,
             'point_value'=> 0.01,
             'is_active'  => 1,
+            'created_at' => date('Y-m-d H:i:s'),
+            'updated_at' => date('Y-m-d H:i:s'),
+        ]);
+    }
+
+    $warehouseExists = $CI->db->where('code', 'MAIN')->count_all_results(db_prefix() . 'pos_warehouses') > 0;
+    if (!$warehouseExists) {
+        $CI->db->insert(db_prefix() . 'pos_warehouses', [
+            'name' => 'Main Warehouse',
+            'code' => 'MAIN',
+            'is_active' => 1,
             'created_at' => date('Y-m-d H:i:s'),
             'updated_at' => date('Y-m-d H:i:s'),
         ]);
@@ -400,6 +463,10 @@ function omnipos_create_default_options()
     if (get_option('pos_wallet_require_pin') === '') {
         add_option('pos_wallet_require_pin', '1');
     }
+
+    if (get_option('pos_default_warehouse_id') === '') {
+        add_option('pos_default_warehouse_id', '1');
+    }
 }
 
 function omnipos_upgrade_schema()
@@ -413,6 +480,82 @@ function omnipos_upgrade_schema()
 
     if (!$CI->db->field_exists('group_id', $prefix . 'pos_storeroom_stock')) {
         $CI->db->query('ALTER TABLE `' . $prefix . 'pos_storeroom_stock` ADD `group_id` INT UNSIGNED NOT NULL DEFAULT 0 AFTER `item_id`');
+    }
+
+    if (!$CI->db->field_exists('warehouse_id', $prefix . 'pos_shifts')) {
+        $CI->db->query('ALTER TABLE `' . $prefix . 'pos_shifts` ADD `warehouse_id` BIGINT UNSIGNED NULL AFTER `register_key`');
+    }
+
+    if ($CI->db->table_exists($prefix . 'pos_storeroom_stock') && !$CI->db->field_exists('warehouse_id', $prefix . 'pos_storeroom_stock')) {
+        $CI->db->query('ALTER TABLE `' . $prefix . 'pos_storeroom_stock` ADD `warehouse_id` BIGINT UNSIGNED NOT NULL DEFAULT 1 AFTER `id`');
+    }
+
+    if ($CI->db->table_exists($prefix . 'pos_inventory_ledger') && !$CI->db->field_exists('warehouse_id', $prefix . 'pos_inventory_ledger')) {
+        $CI->db->query('ALTER TABLE `' . $prefix . 'pos_inventory_ledger` ADD `warehouse_id` BIGINT UNSIGNED NOT NULL DEFAULT 1 AFTER `id`');
+    }
+
+    if ($CI->db->table_exists($prefix . 'pos_inventory_ledger') && !$CI->db->field_exists('to_warehouse_id', $prefix . 'pos_inventory_ledger')) {
+        $CI->db->query('ALTER TABLE `' . $prefix . 'pos_inventory_ledger` ADD `to_warehouse_id` BIGINT UNSIGNED NULL AFTER `warehouse_id`');
+    }
+
+    if ($CI->db->table_exists($prefix . 'pos_inventory_ledger') && !$CI->db->field_exists('reason_code', $prefix . 'pos_inventory_ledger')) {
+        $CI->db->query('ALTER TABLE `' . $prefix . 'pos_inventory_ledger` ADD `reason_code` VARCHAR(50) NULL AFTER `qty_after`');
+    }
+
+    if ($CI->db->table_exists($prefix . 'pos_storeroom_stock')) {
+        $idxRows = $CI->db->query('SHOW INDEX FROM `' . $prefix . 'pos_storeroom_stock` WHERE Key_name = "uniq_item"')->result_array();
+        if (!empty($idxRows)) {
+            $CI->db->query('ALTER TABLE `' . $prefix . 'pos_storeroom_stock` DROP INDEX `uniq_item`');
+        }
+
+        $idxRows2 = $CI->db->query('SHOW INDEX FROM `' . $prefix . 'pos_storeroom_stock` WHERE Key_name = "uniq_warehouse_item"')->result_array();
+        if (empty($idxRows2)) {
+            $CI->db->query('ALTER TABLE `' . $prefix . 'pos_storeroom_stock` ADD UNIQUE KEY `uniq_warehouse_item` (`warehouse_id`, `item_id`)');
+        }
+    }
+
+    if (!$CI->db->table_exists($prefix . 'pos_warehouses')) {
+        $CI->db->query('CREATE TABLE IF NOT EXISTS `' . $prefix . 'pos_warehouses` (
+            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `name` VARCHAR(191) NOT NULL,
+            `code` VARCHAR(50) NOT NULL,
+            `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+            `created_at` DATETIME NOT NULL,
+            `updated_at` DATETIME NOT NULL,
+            PRIMARY KEY (`id`),
+            UNIQUE KEY `uniq_code` (`code`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci');
+    }
+
+    if (!$CI->db->table_exists($prefix . 'pos_purchase_orders')) {
+        $CI->db->query('CREATE TABLE IF NOT EXISTS `' . $prefix . 'pos_purchase_orders` (
+            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `warehouse_id` BIGINT UNSIGNED NOT NULL,
+            `supplier_name` VARCHAR(191) NOT NULL,
+            `reference_no` VARCHAR(100) NOT NULL,
+            `status` VARCHAR(30) NOT NULL DEFAULT "draft",
+            `expected_at` DATE NULL,
+            `received_at` DATETIME NULL,
+            `notes` TEXT NULL,
+            `created_by` INT UNSIGNED NULL,
+            `created_at` DATETIME NOT NULL,
+            PRIMARY KEY (`id`),
+            KEY `idx_warehouse` (`warehouse_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci');
+    }
+
+    if (!$CI->db->table_exists($prefix . 'pos_purchase_order_items')) {
+        $CI->db->query('CREATE TABLE IF NOT EXISTS `' . $prefix . 'pos_purchase_order_items` (
+            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `purchase_order_id` BIGINT UNSIGNED NOT NULL,
+            `item_id` INT UNSIGNED NOT NULL,
+            `expected_qty` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            `received_qty` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            `unit_cost` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            PRIMARY KEY (`id`),
+            KEY `idx_po` (`purchase_order_id`),
+            KEY `idx_item` (`item_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci');
     }
 
     if (!$CI->db->field_exists('global_discount_type', $prefix . 'pos_carts')) {
@@ -465,5 +608,16 @@ function omnipos_upgrade_schema()
 
     if (!$CI->db->field_exists('daily_spent_date', $prefix . 'pos_wallet_staff_accounts')) {
         $CI->db->query('ALTER TABLE `' . $prefix . 'pos_wallet_staff_accounts` ADD `daily_spent_date` DATE NULL AFTER `daily_spent`');
+    }
+
+    $warehouseExists = $CI->db->where('code', 'MAIN')->count_all_results($prefix . 'pos_warehouses') > 0;
+    if (!$warehouseExists) {
+        $CI->db->insert($prefix . 'pos_warehouses', [
+            'name' => 'Main Warehouse',
+            'code' => 'MAIN',
+            'is_active' => 1,
+            'created_at' => date('Y-m-d H:i:s'),
+            'updated_at' => date('Y-m-d H:i:s'),
+        ]);
     }
 }
