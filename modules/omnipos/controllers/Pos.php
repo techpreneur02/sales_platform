@@ -22,7 +22,7 @@ class Pos extends AdminController
     {
         $data['title'] = 'OmniPOS Terminal';
         $data['items_groups'] = $this->invoice_items_model->get_groups();
-        $data['items'] = $this->invoice_items_model->get('', [], true);
+        $data['items'] = $this->invoice_items_model->get();
         $data['cart'] = $this->get_active_cart();
         $data['cart_items'] = $this->get_active_cart_items();
         $data['current_shift'] = $this->get_open_shift();
@@ -32,6 +32,8 @@ class Pos extends AdminController
             ->order_by('id', 'DESC')
             ->get(db_prefix() . 'pos_suspended_carts')
             ->result_array();
+        $data['stock_map'] = $this->get_stock_map();
+        $data['zero_stock_locked'] = get_option('pos_allow_zero_stock_sales') !== '1';
 
         $this->load->view('omnipos/pos/index', $data);
     }
@@ -55,10 +57,176 @@ class Pos extends AdminController
             show_404();
         }
 
+        $cart = $this->get_active_cart();
+        $cartItems = $this->get_active_cart_items();
+
         $this->json_response(true, 'Cart loaded', [
+            'cart' => $cart,
+            'items' => $cartItems,
+            'totals' => $this->calculate_cart_totals($cartItems, $cart),
+        ]);
+    }
+
+    public function search_items()
+    {
+        if (!$this->input->is_ajax_request()) {
+            show_404();
+        }
+
+        $q = trim((string) $this->input->get('q', true));
+
+        $this->db->select(db_prefix() . 'items.id as itemid, description, long_description, rate, group_id, ' . db_prefix() . 'items_groups.name as group_name');
+        $this->db->from(db_prefix() . 'items');
+        $this->db->join(db_prefix() . 'items_groups', db_prefix() . 'items_groups.id = ' . db_prefix() . 'items.group_id', 'left');
+
+        if ($q !== '') {
+            $safeQ = $this->db->escape_like_str($q);
+
+            $this->db->group_start();
+            $this->db->like('description', $q);
+            $this->db->or_like('long_description', $q);
+
+            if ($this->db->field_exists('sku', db_prefix() . 'items')) {
+                $this->db->or_like('sku', $q);
+            }
+
+            if ($this->db->field_exists('barcode', db_prefix() . 'items')) {
+                $this->db->or_like('barcode', $q);
+            }
+
+            $this->db->or_where('EXISTS (SELECT 1 FROM ' . db_prefix() . 'customfieldsvalues cfv WHERE cfv.relid=' . db_prefix() . 'items.id AND cfv.fieldto="items_pr" AND cfv.value LIKE "%'.$safeQ.'%")', null, false);
+            $this->db->group_end();
+        }
+
+        $this->db->order_by('description', 'ASC');
+        $this->db->limit(40);
+
+        $rows = $this->db->get()->result_array();
+        $stockMap = $this->get_stock_map();
+
+        foreach ($rows as &$row) {
+            $itemId = (int) $row['itemid'];
+            $row['stock_qty'] = isset($stockMap[$itemId]) ? (float) $stockMap[$itemId] : 0;
+            $row['stock_locked'] = $this->is_zero_stock_locked() && $row['stock_qty'] <= 0;
+        }
+
+        $this->json_response(true, 'Search complete', [
+            'items' => $rows,
+        ]);
+    }
+
+    public function add_item()
+    {
+        if (!$this->input->is_ajax_request()) {
+            show_404();
+        }
+
+        $itemId = (int) $this->input->post('item_id');
+        $qty = max(1, (float) $this->input->post('qty'));
+
+        if ($itemId < 1) {
+            $this->json_response(false, 'Invalid item ID.');
+        }
+
+        $item = $this->invoice_items_model->get($itemId);
+        if (!$item) {
+            $this->json_response(false, 'Item not found.');
+        }
+
+        $item = (array) $item;
+        $this->add_item_to_cart($item, $qty);
+    }
+
+    public function update_line_item()
+    {
+        if (!$this->input->is_ajax_request()) {
+            show_404();
+        }
+
+        $lineId = (int) $this->input->post('line_id');
+        $qty = max(0.01, (float) $this->input->post('qty'));
+        $discountType = strtolower(trim((string) $this->input->post('discount_type', true)));
+        $discountValue = max(0, (float) $this->input->post('discount_value'));
+        $taxRate = max(0, (float) $this->input->post('tax_rate'));
+        $notes = trim((string) $this->input->post('notes', true));
+
+        if (!in_array($discountType, ['', 'fixed', 'percent'], true)) {
+            $discountType = '';
+        }
+
+        $cart = $this->get_active_cart();
+        if (!$cart) {
+            $this->json_response(false, 'No active cart.');
+        }
+
+        $line = $this->db
+            ->where('id', $lineId)
+            ->where('cart_id', $cart['id'])
+            ->get(db_prefix() . 'pos_cart_items')
+            ->row_array();
+
+        if (!$line) {
+            $this->json_response(false, 'Cart line not found.');
+        }
+
+        if (!$this->can_sell_qty((int) $line['item_id'], $qty)) {
+            $this->json_response(false, 'Zero-stock lockout is active for this item.');
+        }
+
+        $this->db->where('id', $lineId);
+        $this->db->update(db_prefix() . 'pos_cart_items', [
+            'qty' => $qty,
+            'modifier_discount_type' => $discountType,
+            'modifier_discount_value' => $discountValue,
+            'modifier_tax_rate' => $taxRate,
+            'modifier_notes' => $notes,
+        ]);
+
+        $this->touch_cart($cart['id']);
+
+        $items = $this->get_active_cart_items();
+
+        $this->json_response(true, 'Line updated.', [
             'cart' => $this->get_active_cart(),
-            'items' => $this->get_active_cart_items(),
-            'totals' => $this->calculate_cart_totals($this->get_active_cart_items()),
+            'cart_items' => $items,
+            'totals' => $this->calculate_cart_totals($items, $this->get_active_cart()),
+        ]);
+    }
+
+    public function update_cart_adjustments()
+    {
+        if (!$this->input->is_ajax_request()) {
+            show_404();
+        }
+
+        $cart = $this->get_active_cart();
+        if (!$cart) {
+            $this->json_response(false, 'No active cart found.');
+        }
+
+        $discountType = strtolower(trim((string) $this->input->post('discount_type', true)));
+        $discountValue = max(0, (float) $this->input->post('discount_value'));
+        $serviceCharge = max(0, (float) $this->input->post('service_charge'));
+
+        if (!in_array($discountType, ['', 'fixed', 'percent'], true)) {
+            $discountType = '';
+        }
+
+        $this->db->where('id', $cart['id']);
+        $this->db->update(db_prefix() . 'pos_carts', [
+            'global_discount_type' => $discountType,
+            'global_discount_value' => $discountValue,
+            'service_charge_value' => $serviceCharge,
+            'updated_at' => date('Y-m-d H:i:s'),
+        ]);
+
+        $updatedCart = $this->get_active_cart();
+        $items = $this->get_active_cart_items();
+
+        $this->json_response(true, 'Cart adjustments updated.', [
+            'cart' => $updatedCart,
+            'cart_items' => $items,
+            'totals' => $this->calculate_cart_totals($items, $updatedCart),
         ]);
     }
 
@@ -91,10 +259,9 @@ class Pos extends AdminController
         ];
 
         $this->db->insert(db_prefix() . 'pos_shifts', $insertData);
-        $shiftId = (int) $this->db->insert_id();
 
         $this->json_response(true, 'Shift opened successfully.', [
-            'shift_id' => $shiftId,
+            'shift_id' => (int) $this->db->insert_id(),
         ]);
     }
 
@@ -179,45 +346,7 @@ class Pos extends AdminController
             $this->json_response(false, 'No product found for scanned barcode.');
         }
 
-        $cart = $this->get_or_create_active_cart($shift['id']);
-
-        $lineRate = (float) $item['rate'];
-
-        $existingItem = $this->db
-            ->where('cart_id', $cart['id'])
-            ->where('item_id', $item['itemid'])
-            ->get(db_prefix() . 'pos_cart_items')
-            ->row_array();
-
-        if ($existingItem) {
-            $qty = (float) $existingItem['qty'] + 1;
-            $this->db->where('id', $existingItem['id']);
-            $this->db->update(db_prefix() . 'pos_cart_items', [
-                'qty' => $qty,
-                'line_total' => $qty * $lineRate,
-            ]);
-        } else {
-            $this->db->insert(db_prefix() . 'pos_cart_items', [
-                'cart_id'           => $cart['id'],
-                'item_id'           => $item['itemid'],
-                'description'       => $item['description'],
-                'long_description'  => $item['long_description'],
-                'qty'               => 1,
-                'unit_price'        => $lineRate,
-                'line_total'        => $lineRate,
-            ]);
-        }
-
-        $this->touch_cart($cart['id']);
-
-        $items = $this->get_active_cart_items();
-
-        $this->json_response(true, 'Item added to cart.', [
-            'item' => $item,
-            'cart' => $this->get_active_cart(),
-            'cart_items' => $items,
-            'totals' => $this->calculate_cart_totals($items),
-        ]);
+        $this->add_item_to_cart($item, 1);
     }
 
     public function suspend_cart()
@@ -315,6 +444,10 @@ class Pos extends AdminController
                 'qty'               => $item['qty'],
                 'unit_price'        => $item['unit_price'],
                 'line_total'        => $item['line_total'],
+                'modifier_discount_type' => '',
+                'modifier_discount_value' => 0,
+                'modifier_tax_rate' => 0,
+                'modifier_notes' => null,
             ]);
         }
 
@@ -356,21 +489,15 @@ class Pos extends AdminController
         }
 
         $paymentType = strtolower(trim((string) $this->input->post('payment_type', true)));
-        if (!in_array($paymentType, ['cash', 'card'], true)) {
-            $this->json_response(false, 'Payment type must be cash or card.');
+        if (!in_array($paymentType, ['cash', 'card', 'split'], true)) {
+            $this->json_response(false, 'Payment type must be cash, card, or split.');
         }
 
         $cardBrand = trim((string) $this->input->post('card_brand', true));
         $cardAuthCode = trim((string) $this->input->post('card_auth_code', true));
         $cardLast4 = preg_replace('/[^0-9]/', '', (string) $this->input->post('card_last4', true));
 
-        if ($paymentType === 'card') {
-            if ($cardBrand === '' || $cardAuthCode === '' || strlen($cardLast4) !== 4) {
-                $this->json_response(false, 'Card brand, auth code and last 4 digits are required for card payment.');
-            }
-        }
-
-        $totals = $this->calculate_cart_totals($cartItems);
+        $totals = $this->calculate_cart_totals($cartItems, $cart);
         $pointsUsed = max(0, (int) $this->input->post('points_to_use'));
         $pointValue = (float) get_option('pos_loyalty_point_value');
         $pointValue = $pointValue > 0 ? $pointValue : 0.01;
@@ -382,16 +509,90 @@ class Pos extends AdminController
                 $this->json_response(false, 'Insufficient loyalty points.');
             }
             $discountFromPoints = round($pointsUsed * $pointValue, 2);
-            $discountFromPoints = min($discountFromPoints, $totals['subtotal']);
+            $discountFromPoints = min($discountFromPoints, $totals['grand_total']);
+        }
+
+        $finalTotal = round(max(0, $totals['grand_total'] - $discountFromPoints), 2);
+
+        $splitCashAmount = max(0, (float) $this->input->post('split_cash_amount'));
+        $splitCardAmount = max(0, (float) $this->input->post('split_card_amount'));
+        $cashReceived = max(0, (float) $this->input->post('cash_received'));
+
+        if ($paymentType === 'card' || ($paymentType === 'split' && $splitCardAmount > 0)) {
+            if ($cardBrand === '' || $cardAuthCode === '' || strlen($cardLast4) !== 4) {
+                $this->json_response(false, 'Card brand, auth code and last 4 digits are required for card payment.');
+            }
+        }
+
+        if ($paymentType === 'split') {
+            if ($splitCashAmount <= 0 || $splitCardAmount <= 0) {
+                $this->json_response(false, 'Split checkout requires both cash and card amounts.');
+            }
+
+            if (abs(($splitCashAmount + $splitCardAmount) - $finalTotal) > 0.01) {
+                $this->json_response(false, 'Split amounts must match invoice total.');
+            }
+        }
+
+        if ($paymentType === 'cash' && $cashReceived <= 0) {
+            $cashReceived = $finalTotal;
+        }
+
+        if ($paymentType === 'split' && $cashReceived <= 0) {
+            $cashReceived = $splitCashAmount;
+        }
+
+        $changeDue = 0;
+        if ($paymentType === 'cash') {
+            $changeDue = max(0, $cashReceived - $finalTotal);
+        }
+
+        if ($paymentType === 'split') {
+            $changeDue = max(0, $cashReceived - $splitCashAmount);
         }
 
         $newItems = [];
+
         foreach ($cartItems as $idx => $item) {
+            $lineBase = (float) $item['qty'] * (float) $item['unit_price'];
+            $lineRate = $item['qty'] > 0 ? round($lineBase / (float) $item['qty'], 2) : (float) $item['unit_price'];
+
+            $modText = '';
+            if (!empty($item['modifier_discount_type']) && (float) $item['modifier_discount_value'] > 0) {
+                $modText .= ' | Discount: ' . $item['modifier_discount_type'] . ' ' . $item['modifier_discount_value'];
+            }
+            if ((float) $item['modifier_tax_rate'] > 0) {
+                $modText .= ' | Tax: ' . $item['modifier_tax_rate'] . '%';
+            }
+            if (!empty($item['modifier_notes'])) {
+                $modText .= ' | Notes: ' . $item['modifier_notes'];
+            }
+
             $newItems[$idx + 1] = [
                 'description'      => $item['description'],
-                'long_description' => $item['long_description'],
+                'long_description' => trim((string) $item['long_description'] . $modText),
                 'qty'              => (float) $item['qty'],
-                'rate'             => (float) $item['unit_price'],
+                'rate'             => $lineRate,
+                'unit'             => '',
+            ];
+        }
+
+        if ($totals['global_discount'] > 0) {
+            $newItems[count($newItems) + 1] = [
+                'description'      => 'Global cart discount',
+                'long_description' => 'Applied at checkout',
+                'qty'              => 1,
+                'rate'             => -$totals['global_discount'],
+                'unit'             => '',
+            ];
+        }
+
+        if ($totals['service_charge'] > 0) {
+            $newItems[count($newItems) + 1] = [
+                'description'      => 'Service charge',
+                'long_description' => 'Applied at checkout',
+                'qty'              => 1,
+                'rate'             => $totals['service_charge'],
                 'unit'             => '',
             ];
         }
@@ -417,8 +618,6 @@ class Pos extends AdminController
             'date'             => date('Y-m-d'),
             'duedate'          => date('Y-m-d'),
             'currency'         => isset($client->default_currency) ? (int) $client->default_currency : 0,
-            'subtotal'         => $totals['subtotal'],
-            'total'            => max(0, $totals['subtotal'] - $discountFromPoints),
             'billing_street'   => isset($client->billing_street) ? (string) $client->billing_street : '',
             'billing_city'     => isset($client->billing_city) ? (string) $client->billing_city : '',
             'billing_state'    => isset($client->billing_state) ? (string) $client->billing_state : '',
@@ -430,7 +629,7 @@ class Pos extends AdminController
             'shipping_zip'     => isset($client->shipping_zip) ? (string) $client->shipping_zip : '',
             'shipping_country' => isset($client->shipping_country) ? (int) $client->shipping_country : 0,
             'newitems'         => $newItems,
-            'allowed_payment_modes' => [$this->resolve_payment_mode_id($paymentType)],
+            'allowed_payment_modes' => $this->get_allowed_payment_modes_by_type($paymentType),
         ];
 
         $invoiceId = $this->invoices_model->add($invoiceData);
@@ -439,18 +638,7 @@ class Pos extends AdminController
         }
 
         $invoice = $this->invoices_model->get($invoiceId);
-        $invoiceTotal = $invoice ? (float) $invoice->total : max(0, $totals['subtotal'] - $discountFromPoints);
-
-        $paymentData = [
-            'amount'        => $invoiceTotal,
-            'invoiceid'     => $invoiceId,
-            'paymentmode'   => $this->resolve_payment_mode_id($paymentType),
-            'date'          => date('Y-m-d H:i:s'),
-            'transactionid' => $paymentType === 'card' ? $cardAuthCode : 'POS-CASH-' . strtoupper(app_generate_hash()),
-            'note'          => $paymentType === 'card' ? 'Card ' . $cardBrand . ' ****' . $cardLast4 : 'Cash payment at register',
-        ];
-
-        $invoicePaymentId = (int) $this->payments_model->add($paymentData);
+        $invoiceTotal = $invoice ? (float) $invoice->total : $finalTotal;
 
         $this->db->insert(db_prefix() . 'pos_transactions', [
             'shift_id'        => $shift['id'],
@@ -458,13 +646,13 @@ class Pos extends AdminController
             'invoice_id'      => $invoiceId,
             'staff_id'        => get_staff_user_id(),
             'client_id'       => $clientId,
-            'subtotal'        => $totals['subtotal'],
-            'discount_total'  => $discountFromPoints,
+            'subtotal'        => $totals['subtotal_before_adjustments'],
+            'discount_total'  => $totals['line_discount_total'] + $totals['global_discount'] + $discountFromPoints,
             'total'           => $invoiceTotal,
             'payment_type'    => $paymentType,
-            'card_brand'      => $paymentType === 'card' ? $cardBrand : null,
-            'card_auth_code'  => $paymentType === 'card' ? $cardAuthCode : null,
-            'card_last4'      => $paymentType === 'card' ? $cardLast4 : null,
+            'card_brand'      => ($paymentType === 'card' || $paymentType === 'split') ? $cardBrand : null,
+            'card_auth_code'  => ($paymentType === 'card' || $paymentType === 'split') ? $cardAuthCode : null,
+            'card_last4'      => ($paymentType === 'card' || $paymentType === 'split') ? $cardLast4 : null,
             'created_at'      => date('Y-m-d H:i:s'),
         ]);
 
@@ -482,16 +670,64 @@ class Pos extends AdminController
             $this->decrement_stock_for_sale((int) $item['item_id'], (float) $item['qty'], $transactionId);
         }
 
-        $this->db->insert(db_prefix() . 'pos_payment_logs', [
-            'transaction_id'     => $transactionId,
-            'invoice_payment_id' => $invoicePaymentId > 0 ? $invoicePaymentId : null,
-            'payment_type'       => $paymentType,
-            'amount'             => $invoiceTotal,
-            'card_brand'         => $paymentType === 'card' ? $cardBrand : null,
-            'card_auth_code'     => $paymentType === 'card' ? $cardAuthCode : null,
-            'card_last4'         => $paymentType === 'card' ? $cardLast4 : null,
-            'created_at'         => date('Y-m-d H:i:s'),
-        ]);
+        $paymentEntries = [];
+
+        if ($paymentType === 'cash') {
+            $paymentEntries[] = [
+                'type' => 'cash',
+                'amount' => $invoiceTotal,
+                'transaction_id' => 'POS-CASH-' . strtoupper(app_generate_hash()),
+                'note' => 'Cash payment at register',
+            ];
+        } elseif ($paymentType === 'card') {
+            $paymentEntries[] = [
+                'type' => 'card',
+                'amount' => $invoiceTotal,
+                'transaction_id' => $cardAuthCode,
+                'note' => 'Card ' . $cardBrand . ' ****' . $cardLast4,
+            ];
+        } else {
+            $paymentEntries[] = [
+                'type' => 'cash',
+                'amount' => $splitCashAmount,
+                'transaction_id' => 'POS-SPLIT-CASH-' . strtoupper(app_generate_hash()),
+                'note' => 'Split cash payment',
+            ];
+            $paymentEntries[] = [
+                'type' => 'card',
+                'amount' => $splitCardAmount,
+                'transaction_id' => $cardAuthCode,
+                'note' => 'Split card ' . $cardBrand . ' ****' . $cardLast4,
+            ];
+        }
+
+        $paymentIds = [];
+
+        foreach ($paymentEntries as $entry) {
+            $modeId = $this->resolve_payment_mode_id($entry['type']);
+
+            $paymentId = (int) $this->payments_model->add([
+                'amount'        => $entry['amount'],
+                'invoiceid'     => $invoiceId,
+                'paymentmode'   => $modeId,
+                'date'          => date('Y-m-d H:i:s'),
+                'transactionid' => $entry['transaction_id'],
+                'note'          => $entry['note'],
+            ]);
+
+            $paymentIds[] = $paymentId;
+
+            $this->db->insert(db_prefix() . 'pos_payment_logs', [
+                'transaction_id'     => $transactionId,
+                'invoice_payment_id' => $paymentId > 0 ? $paymentId : null,
+                'payment_type'       => $entry['type'],
+                'amount'             => $entry['amount'],
+                'card_brand'         => $entry['type'] === 'card' ? $cardBrand : null,
+                'card_auth_code'     => $entry['type'] === 'card' ? $cardAuthCode : null,
+                'card_last4'         => $entry['type'] === 'card' ? $cardLast4 : null,
+                'created_at'         => date('Y-m-d H:i:s'),
+            ]);
+        }
 
         if ($pointsUsed > 0) {
             $this->add_loyalty_entry($clientId, $transactionId, 'redeem', -$pointsUsed, 'Redeemed on checkout');
@@ -517,9 +753,69 @@ class Pos extends AdminController
         $this->json_response(true, 'Checkout completed.', [
             'invoice_id' => $invoiceId,
             'transaction_id' => $transactionId,
-            'payment_id' => $invoicePaymentId,
+            'payment_ids' => $paymentIds,
             'points_earned' => $pointsEarned,
             'points_used' => $pointsUsed,
+            'change_due' => round($changeDue, 2),
+        ]);
+    }
+
+    private function add_item_to_cart($item, $qty)
+    {
+        $shift = $this->get_open_shift();
+        if (!$shift) {
+            $this->json_response(false, 'Open a shift before adding items.');
+        }
+
+        $itemId = (int) $item['itemid'];
+
+        $cart = $this->get_or_create_active_cart($shift['id']);
+
+        $existingItem = $this->db
+            ->where('cart_id', $cart['id'])
+            ->where('item_id', $itemId)
+            ->get(db_prefix() . 'pos_cart_items')
+            ->row_array();
+
+        $targetQty = $qty;
+        if ($existingItem) {
+            $targetQty += (float) $existingItem['qty'];
+        }
+
+        if (!$this->can_sell_qty($itemId, $targetQty)) {
+            $this->json_response(false, 'Item is out of stock and zero-stock lockout is active.');
+        }
+
+        if ($existingItem) {
+            $this->db->where('id', $existingItem['id']);
+            $this->db->update(db_prefix() . 'pos_cart_items', [
+                'qty' => $targetQty,
+            ]);
+        } else {
+            $this->db->insert(db_prefix() . 'pos_cart_items', [
+                'cart_id'           => $cart['id'],
+                'item_id'           => $itemId,
+                'description'       => $item['description'],
+                'long_description'  => isset($item['long_description']) ? $item['long_description'] : '',
+                'qty'               => $qty,
+                'unit_price'        => (float) $item['rate'],
+                'line_total'        => (float) $item['rate'] * $qty,
+                'modifier_discount_type' => '',
+                'modifier_discount_value' => 0,
+                'modifier_tax_rate' => (float) get_option('pos_default_tax_rate'),
+                'modifier_notes' => null,
+            ]);
+        }
+
+        $this->touch_cart($cart['id']);
+
+        $items = $this->get_active_cart_items();
+
+        $this->json_response(true, 'Item added to cart.', [
+            'item' => $item,
+            'cart' => $this->get_active_cart(),
+            'cart_items' => $items,
+            'totals' => $this->calculate_cart_totals($items, $this->get_active_cart()),
         ]);
     }
 
@@ -545,6 +841,9 @@ class Pos extends AdminController
             'staff_id'    => get_staff_user_id(),
             'shift_id'    => $shiftId,
             'status'      => 'active',
+            'global_discount_type' => '',
+            'global_discount_value' => 0,
+            'service_charge_value' => 0,
             'created_at'  => date('Y-m-d H:i:s'),
             'updated_at'  => date('Y-m-d H:i:s'),
         ];
@@ -572,11 +871,61 @@ class Pos extends AdminController
             return [];
         }
 
-        return $this->db
+        $items = $this->db
             ->where('cart_id', $cart['id'])
             ->order_by('id', 'ASC')
             ->get(db_prefix() . 'pos_cart_items')
             ->result_array();
+
+        $didUpdate = false;
+        foreach ($items as &$item) {
+            $line = $this->calculate_line_total($item);
+            if (abs((float) $item['line_total'] - $line['line_total']) > 0.0001) {
+                $this->db->where('id', $item['id']);
+                $this->db->update(db_prefix() . 'pos_cart_items', ['line_total' => $line['line_total']]);
+                $item['line_total'] = $line['line_total'];
+                $didUpdate = true;
+            }
+
+            $item['line_discount_amount'] = $line['line_discount'];
+            $item['line_tax_amount'] = $line['line_tax'];
+            $item['line_subtotal'] = $line['line_subtotal'];
+        }
+
+        if ($didUpdate) {
+            $this->touch_cart($cart['id']);
+        }
+
+        return $items;
+    }
+
+    private function calculate_line_total($item)
+    {
+        $qty = (float) $item['qty'];
+        $unit = (float) $item['unit_price'];
+        $base = round($qty * $unit, 2);
+
+        $discountType = isset($item['modifier_discount_type']) ? strtolower((string) $item['modifier_discount_type']) : '';
+        $discountValue = isset($item['modifier_discount_value']) ? (float) $item['modifier_discount_value'] : 0;
+
+        $discountAmount = 0;
+        if ($discountType === 'percent') {
+            $discountAmount = round(($base * max(0, min(100, $discountValue))) / 100, 2);
+        } elseif ($discountType === 'fixed') {
+            $discountAmount = min($base, round(max(0, $discountValue), 2));
+        }
+
+        $subtotalAfterDiscount = max(0, $base - $discountAmount);
+
+        $taxRate = isset($item['modifier_tax_rate']) ? (float) $item['modifier_tax_rate'] : 0;
+        $taxAmount = round(($subtotalAfterDiscount * max(0, $taxRate)) / 100, 2);
+
+        return [
+            'line_subtotal' => $base,
+            'line_discount' => $discountAmount,
+            'line_tax' => $taxAmount,
+            'line_total' => round($subtotalAfterDiscount + $taxAmount, 2),
+        ];
     }
 
     private function touch_cart($cartId)
@@ -591,6 +940,7 @@ class Pos extends AdminController
     {
         $table = db_prefix() . 'items';
 
+        $this->db->select(db_prefix() . 'items.id as itemid, description, long_description, rate, group_id');
         $this->db->from($table);
         $this->db->group_start();
 
@@ -609,17 +959,47 @@ class Pos extends AdminController
         return $this->db->get()->row_array();
     }
 
-    private function calculate_cart_totals($cartItems)
+    private function calculate_cart_totals($cartItems, $cart = null)
     {
-        $subtotal = 0;
-
-        foreach ($cartItems as $item) {
-            $subtotal += (float) $item['line_total'];
+        if (!$cart) {
+            $cart = $this->get_active_cart();
         }
 
+        $lineSubtotal = 0;
+        $lineDiscount = 0;
+        $taxTotal = 0;
+
+        foreach ($cartItems as $item) {
+            $line = $this->calculate_line_total($item);
+            $lineSubtotal += $line['line_subtotal'];
+            $lineDiscount += $line['line_discount'];
+            $taxTotal += $line['line_tax'];
+        }
+
+        $subtotalAfterLineDiscount = max(0, $lineSubtotal - $lineDiscount);
+
+        $globalDiscount = 0;
+        $globalDiscountType = isset($cart['global_discount_type']) ? strtolower((string) $cart['global_discount_type']) : '';
+        $globalDiscountValue = isset($cart['global_discount_value']) ? (float) $cart['global_discount_value'] : 0;
+
+        if ($globalDiscountType === 'percent') {
+            $globalDiscount = round(($subtotalAfterLineDiscount * max(0, min(100, $globalDiscountValue))) / 100, 2);
+        } elseif ($globalDiscountType === 'fixed') {
+            $globalDiscount = min($subtotalAfterLineDiscount, round(max(0, $globalDiscountValue), 2));
+        }
+
+        $serviceCharge = isset($cart['service_charge_value']) ? round(max(0, (float) $cart['service_charge_value']), 2) : 0;
+
+        $grandTotal = round(max(0, ($subtotalAfterLineDiscount - $globalDiscount) + $taxTotal + $serviceCharge), 2);
+
         return [
-            'subtotal' => round($subtotal, 2),
-            'total' => round($subtotal, 2),
+            'subtotal_before_adjustments' => round($lineSubtotal, 2),
+            'line_discount_total' => round($lineDiscount, 2),
+            'subtotal_after_line_discount' => round($subtotalAfterLineDiscount, 2),
+            'tax_total' => round($taxTotal, 2),
+            'global_discount' => round($globalDiscount, 2),
+            'service_charge' => round($serviceCharge, 2),
+            'grand_total' => $grandTotal,
         ];
     }
 
@@ -642,6 +1022,7 @@ class Pos extends AdminController
             $newQty = -$qty;
             $this->db->insert(db_prefix() . 'pos_storeroom_stock', [
                 'item_id' => $itemId,
+                'group_id' => 0,
                 'qty_on_hand' => $newQty,
                 'reorder_level' => 0,
                 'updated_at' => date('Y-m-d H:i:s'),
@@ -659,6 +1040,43 @@ class Pos extends AdminController
             'created_by' => get_staff_user_id(),
             'created_at' => date('Y-m-d H:i:s'),
         ]);
+    }
+
+    private function get_stock_map()
+    {
+        $rows = $this->db
+            ->select('item_id, qty_on_hand')
+            ->get(db_prefix() . 'pos_storeroom_stock')
+            ->result_array();
+
+        $map = [];
+        foreach ($rows as $row) {
+            $map[(int) $row['item_id']] = (float) $row['qty_on_hand'];
+        }
+
+        return $map;
+    }
+
+    private function is_zero_stock_locked()
+    {
+        return get_option('pos_allow_zero_stock_sales') !== '1';
+    }
+
+    private function can_sell_qty($itemId, $targetQty)
+    {
+        if (!$this->is_zero_stock_locked()) {
+            return true;
+        }
+
+        $stock = $this->db
+            ->select('qty_on_hand')
+            ->where('item_id', $itemId)
+            ->get(db_prefix() . 'pos_storeroom_stock')
+            ->row_array();
+
+        $qtyOnHand = $stock ? (float) $stock['qty_on_hand'] : 0;
+
+        return $qtyOnHand >= (float) $targetQty;
     }
 
     private function add_loyalty_entry($clientId, $transactionId, $entryType, $points, $notes)
@@ -710,6 +1128,18 @@ class Pos extends AdminController
         }
 
         return (int) $row['points_balance'];
+    }
+
+    private function get_allowed_payment_modes_by_type($paymentType)
+    {
+        if ($paymentType === 'split') {
+            return [
+                $this->resolve_payment_mode_id('cash'),
+                $this->resolve_payment_mode_id('card'),
+            ];
+        }
+
+        return [$this->resolve_payment_mode_id($paymentType)];
     }
 
     private function resolve_payment_mode_id($paymentType)

@@ -13,6 +13,7 @@ define('OMNIPOS_MODULE_NAME', 'omnipos');
 
 hooks()->add_filter('module_' . OMNIPOS_MODULE_NAME . '_action_links', 'module_omnipos_action_links');
 hooks()->add_action('admin_init', 'omnipos_admin_init_menu');
+hooks()->add_action('admin_init', 'omnipos_upgrade_schema');
 hooks()->add_action('app_admin_footer', 'omnipos_inject_scanner_asset');
 hooks()->add_action('clients_init', 'omnipos_add_clients_menu_item');
 hooks()->add_filter('get_client_portal_menu_items', 'omnipos_add_client_portal_menu_item');
@@ -386,5 +387,55 @@ function omnipos_create_default_options()
 
     if (get_option('pos_default_register') === '') {
         add_option('pos_default_register', 'main-register');
+    }
+
+    if (get_option('pos_allow_zero_stock_sales') === '') {
+        add_option('pos_allow_zero_stock_sales', '0');
+    }
+
+    if (get_option('pos_default_tax_rate') === '') {
+        add_option('pos_default_tax_rate', '0');
+    }
+}
+
+function omnipos_upgrade_schema()
+{
+    if (!is_admin()) {
+        return;
+    }
+
+    $CI = &get_instance();
+    $prefix = db_prefix();
+
+    if (!$CI->db->field_exists('group_id', $prefix . 'pos_storeroom_stock')) {
+        $CI->db->query('ALTER TABLE `' . $prefix . 'pos_storeroom_stock` ADD `group_id` INT UNSIGNED NOT NULL DEFAULT 0 AFTER `item_id`');
+    }
+
+    if (!$CI->db->field_exists('global_discount_type', $prefix . 'pos_carts')) {
+        $CI->db->query('ALTER TABLE `' . $prefix . 'pos_carts` ADD `global_discount_type` VARCHAR(20) NULL AFTER `client_id`');
+    }
+
+    if (!$CI->db->field_exists('global_discount_value', $prefix . 'pos_carts')) {
+        $CI->db->query('ALTER TABLE `' . $prefix . 'pos_carts` ADD `global_discount_value` DECIMAL(15,2) NOT NULL DEFAULT 0.00 AFTER `global_discount_type`');
+    }
+
+    if (!$CI->db->field_exists('service_charge_value', $prefix . 'pos_carts')) {
+        $CI->db->query('ALTER TABLE `' . $prefix . 'pos_carts` ADD `service_charge_value` DECIMAL(15,2) NOT NULL DEFAULT 0.00 AFTER `global_discount_value`');
+    }
+
+    if (!$CI->db->field_exists('modifier_discount_type', $prefix . 'pos_cart_items')) {
+        $CI->db->query('ALTER TABLE `' . $prefix . 'pos_cart_items` ADD `modifier_discount_type` VARCHAR(20) NULL AFTER `line_total`');
+    }
+
+    if (!$CI->db->field_exists('modifier_discount_value', $prefix . 'pos_cart_items')) {
+        $CI->db->query('ALTER TABLE `' . $prefix . 'pos_cart_items` ADD `modifier_discount_value` DECIMAL(15,2) NOT NULL DEFAULT 0.00 AFTER `modifier_discount_type`');
+    }
+
+    if (!$CI->db->field_exists('modifier_tax_rate', $prefix . 'pos_cart_items')) {
+        $CI->db->query('ALTER TABLE `' . $prefix . 'pos_cart_items` ADD `modifier_tax_rate` DECIMAL(8,4) NOT NULL DEFAULT 0.0000 AFTER `modifier_discount_value`');
+    }
+
+    if (!$CI->db->field_exists('modifier_notes', $prefix . 'pos_cart_items')) {
+        $CI->db->query('ALTER TABLE `' . $prefix . 'pos_cart_items` ADD `modifier_notes` VARCHAR(255) NULL AFTER `modifier_tax_rate`');
     }
 }
