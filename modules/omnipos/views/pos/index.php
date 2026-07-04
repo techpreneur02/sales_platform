@@ -151,20 +151,6 @@
                                     <?php } ?>
                                 </select>
                             </div>
-                            <div class="row">
-                                <div class="col-xs-8">
-                                    <div class="form-group">
-                                        <label>Auth Code (optional)</label>
-                                        <input type="text" id="omnipos-card-auth" class="form-control" placeholder="Manual terminal ref">
-                                    </div>
-                                </div>
-                                <div class="col-xs-4">
-                                    <div class="form-group">
-                                        <label>Last 4</label>
-                                        <input type="text" id="omnipos-card-last4" class="form-control" maxlength="4" placeholder="0000">
-                                    </div>
-                                </div>
-                            </div>
                         </div>
                         <div id="omnipos-pay-wallet-fields" class="omnipos-pay-fields hidden">
                             <div class="form-group" style="margin-bottom:0;">
@@ -747,6 +733,50 @@
         return payload;
     }
 
+    function parseJsonPayload(raw) {
+        if (!raw) {
+            return null;
+        }
+
+        if (typeof raw === 'object') {
+            return raw;
+        }
+
+        if (typeof raw !== 'string') {
+            return null;
+        }
+
+        try {
+            return JSON.parse(raw);
+        } catch (e) {
+            var start = raw.indexOf('{');
+            var end = raw.lastIndexOf('}');
+            if (start !== -1 && end > start) {
+                try {
+                    return JSON.parse(raw.substring(start, end + 1));
+                } catch (innerError) {
+                    return null;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    function postJsonRobust(url, payload, onDone) {
+        $.ajax({
+            url: url,
+            method: 'POST',
+            data: csrfPayload(payload || {}),
+            dataType: 'text'
+        }).done(function (raw) {
+            onDone(parseJsonPayload(raw), null, raw);
+        }).fail(function (xhr) {
+            var parsed = parseJsonPayload(xhr && xhr.responseText ? xhr.responseText : '');
+            onDone(parsed, xhr, xhr && xhr.responseText ? xhr.responseText : '');
+        });
+    }
+
     function showMessage(message, type) {
         alert_float(type || 'info', message || 'Done');
     }
@@ -866,13 +896,17 @@
     }
 
     function quickOpenShift(callback) {
-        $.post(ajaxBase + 'omnipos/pos/open_shift', csrfPayload({
+        postJsonRobust(ajaxBase + 'omnipos/pos/open_shift', {
             register_key: '',
             opening_float: 0,
             warehouse_id: 0
-        }), function (res) {
+        }, function (res, xhr) {
             if (!res || !res.success) {
-                showMessage(res && res.message ? res.message : 'Unable to open shift.', 'warning');
+                var msg = res && res.message ? res.message : 'Unable to open shift.';
+                if (!res && xhr && xhr.status) {
+                    msg += ' (' + xhr.status + ')';
+                }
+                showMessage(msg, 'warning');
                 if (typeof callback === 'function') {
                     callback(false);
                 }
@@ -886,16 +920,11 @@
             if (typeof callback === 'function') {
                 callback(true);
             }
-        }, 'json').fail(function () {
-            showMessage('Unable to open shift. Check network and try again.', 'warning');
-            if (typeof callback === 'function') {
-                callback(false);
-            }
         });
     }
 
     function addItem(itemId, qty, didRetryAfterOpenShift) {
-        $.post(ajaxBase + 'omnipos/pos/add_item', csrfPayload({ item_id: itemId, qty: qty || 1 }), function (res) {
+        postJsonRobust(ajaxBase + 'omnipos/pos/add_item', { item_id: itemId, qty: qty || 1 }, function (res, xhr) {
             if (!res || !res.success) {
                 var msg = res && res.message ? res.message : 'Add failed';
                 if (!didRetryAfterOpenShift && /open a shift/i.test(msg)) {
@@ -906,21 +935,13 @@
                     });
                     return;
                 }
+                if (!res && xhr && xhr.status) {
+                    msg += ' (' + xhr.status + ')';
+                }
                 showMessage(msg, 'warning');
                 return;
             }
             renderCart(res.data.cart_items, res.data.cart, res.data.totals);
-        }, 'json').fail(function (xhr) {
-            var msg = 'Add failed (' + (xhr && xhr.status ? xhr.status : 'network') + ').';
-            if (xhr && xhr.responseText && typeof xhr.responseText === 'string' && /open a shift/i.test(xhr.responseText) && !didRetryAfterOpenShift) {
-                quickOpenShift(function (ok) {
-                    if (ok) {
-                        addItem(itemId, qty, true);
-                    }
-                });
-                return;
-            }
-            showMessage(msg, 'warning');
         });
     }
 
@@ -965,8 +986,6 @@
 
         if (paymentType === 'card') {
             payload.card_brand = $('#omnipos-card-brand').val();
-            payload.card_auth_code = $('#omnipos-card-auth').val();
-            payload.card_last4 = $('#omnipos-card-last4').val();
         }
 
         if (paymentType === 'wallet') {
