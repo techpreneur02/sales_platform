@@ -299,20 +299,7 @@ class Pos extends AdminController
 
         $openingFloat = (float) $this->input->post('opening_float');
         $warehouseId = (int) $this->input->post('warehouse_id');
-
-        if ($warehouseId < 1) {
-            $warehouseId = (int) get_option('pos_default_warehouse_id');
-        }
-
-        $warehouse = $this->db
-            ->where('id', $warehouseId)
-            ->where('is_active', 1)
-            ->get(db_prefix() . 'pos_warehouses')
-            ->row_array();
-
-        if (!$warehouse) {
-            $this->json_response(false, 'A valid active warehouse must be selected.');
-        }
+        $warehouseId = $this->resolve_open_shift_warehouse_id($warehouseId);
 
         $existing = $this->get_open_shift();
         if ($existing) {
@@ -324,13 +311,19 @@ class Pos extends AdminController
         $insertData = [
             'staff_id'       => get_staff_user_id(),
             'register_key'   => $registerKey,
-            'warehouse_id'   => $warehouseId,
             'opening_float'  => $openingFloat,
             'opened_at'      => date('Y-m-d H:i:s'),
             'status'         => 'open',
         ];
 
-        $this->db->insert(db_prefix() . 'pos_shifts', $insertData);
+        if ($this->db->field_exists('warehouse_id', db_prefix() . 'pos_shifts')) {
+            $insertData['warehouse_id'] = $warehouseId;
+        }
+
+        $inserted = $this->db->insert(db_prefix() . 'pos_shifts', $insertData);
+        if (!$inserted) {
+            $this->json_response(false, 'Failed to open shift. Please verify OmniPOS tables are upgraded and try again.');
+        }
 
         $this->json_response(true, 'Shift opened successfully.', [
             'shift_id' => (int) $this->db->insert_id(),
@@ -1638,6 +1631,63 @@ class Pos extends AdminController
             ->row_array();
 
         return $warehouse ? (int) $warehouse['id'] : 1;
+    }
+
+    private function resolve_open_shift_warehouse_id($requestedWarehouseId)
+    {
+        $requestedWarehouseId = (int) $requestedWarehouseId;
+
+        if ($requestedWarehouseId > 0) {
+            $warehouse = $this->db
+                ->where('id', $requestedWarehouseId)
+                ->where('is_active', 1)
+                ->get(db_prefix() . 'pos_warehouses')
+                ->row_array();
+
+            if ($warehouse) {
+                return (int) $warehouse['id'];
+            }
+        }
+
+        $defaultWarehouseId = (int) get_option('pos_default_warehouse_id');
+        if ($defaultWarehouseId > 0) {
+            $warehouse = $this->db
+                ->where('id', $defaultWarehouseId)
+                ->where('is_active', 1)
+                ->get(db_prefix() . 'pos_warehouses')
+                ->row_array();
+
+            if ($warehouse) {
+                return (int) $warehouse['id'];
+            }
+        }
+
+        $warehouse = $this->db
+            ->where('is_active', 1)
+            ->order_by('id', 'ASC')
+            ->get(db_prefix() . 'pos_warehouses')
+            ->row_array();
+
+        if ($warehouse) {
+            return (int) $warehouse['id'];
+        }
+
+        $this->db->insert(db_prefix() . 'pos_warehouses', [
+            'name' => 'Main Warehouse',
+            'code' => 'MAIN',
+            'is_active' => 1,
+            'created_at' => date('Y-m-d H:i:s'),
+            'updated_at' => date('Y-m-d H:i:s'),
+        ]);
+
+        $newWarehouseId = (int) $this->db->insert_id();
+        if ($newWarehouseId > 0) {
+            update_option('pos_default_warehouse_id', (string) $newWarehouseId);
+
+            return $newWarehouseId;
+        }
+
+        return 1;
     }
 
     private function get_wallet_staff_by_barcode($barcode)
