@@ -709,6 +709,7 @@
 }
 </style>
 
+<?php init_tail(); ?>
 <script>
 (function () {
     'use strict';
@@ -1214,4 +1215,3 @@
     renderGridPage();
 })();
 </script>
-<?php init_tail(); ?>
