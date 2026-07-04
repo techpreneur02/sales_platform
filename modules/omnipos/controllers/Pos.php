@@ -50,6 +50,15 @@ class Pos extends AdminController
             ->limit(100)
             ->get(db_prefix() . 'pos_shifts')
             ->result_array();
+        $data['current_shift'] = $this->get_open_shift();
+        $data['warehouses'] = $this->db->where('is_active', 1)->order_by('name', 'ASC')->get(db_prefix() . 'pos_warehouses')->result_array();
+        $data['suspended_carts'] = $this->db
+            ->where('staff_id', get_staff_user_id())
+            ->where('status', 'suspended')
+            ->order_by('id', 'DESC')
+            ->get(db_prefix() . 'pos_suspended_carts')
+            ->result_array();
+        $data['refund_reason_codes'] = $this->parse_setting_lines((string) get_option('pos_refund_reason_codes'), ['RETURNED_GOODS', 'WRONG_ITEM', 'DAMAGED_ITEM', 'CUSTOMER_CANCELLED'], true);
 
         $this->load->view('omnipos/pos/shifts', $data);
     }
@@ -347,44 +356,82 @@ class Pos extends AdminController
         $terminalTotal = (float) $this->input->post('terminal_total');
         $notes = trim((string) $this->input->post('notes', true));
 
-        $expectedCash = (float) $this->db
-            ->select_sum('amount')
-            ->where('payment_type', 'cash')
-            ->where('transaction_id IN ' . $this->sub_query_transaction_ids($shift['id']), null, false)
-            ->get(db_prefix() . 'pos_payment_logs')
-            ->row()->amount;
+        $paymentLogTable = db_prefix() . 'pos_payment_logs';
+        $expectedCash = 0.0;
+        $expectedCard = 0.0;
 
-        $expectedCard = (float) $this->db
-            ->select_sum('amount')
-            ->where('payment_type', 'card')
-            ->where('transaction_id IN ' . $this->sub_query_transaction_ids($shift['id']), null, false)
-            ->get(db_prefix() . 'pos_payment_logs')
-            ->row()->amount;
+        if ($this->db->table_exists($paymentLogTable)) {
+            $cashRow = $this->db
+                ->select_sum('amount')
+                ->where('payment_type', 'cash')
+                ->where('transaction_id IN ' . $this->sub_query_transaction_ids($shift['id']), null, false)
+                ->get($paymentLogTable)
+                ->row_array();
+
+            $cardRow = $this->db
+                ->select_sum('amount')
+                ->where('payment_type', 'card')
+                ->where('transaction_id IN ' . $this->sub_query_transaction_ids($shift['id']), null, false)
+                ->get($paymentLogTable)
+                ->row_array();
+
+            $expectedCash = $cashRow && isset($cashRow['amount']) ? (float) $cashRow['amount'] : 0.0;
+            $expectedCard = $cardRow && isset($cardRow['amount']) ? (float) $cardRow['amount'] : 0.0;
+        }
 
         $expectedCashWithFloat = $expectedCash + (float) $shift['opening_float'];
 
-        $this->db->where('id', $shift['id']);
-        $this->db->update(db_prefix() . 'pos_shifts', [
-            'closed_at'              => date('Y-m-d H:i:s'),
-            'status'                 => 'closed',
-            'closing_expected_cash'  => $expectedCashWithFloat,
-            'closing_counted_cash'   => $countedCash,
-            'closing_expected_card'  => $expectedCard,
-            'closing_counted_card'   => $countedCard,
-            'cash_variance'          => $countedCash - $expectedCashWithFloat,
-            'card_variance'          => $countedCard - $expectedCard,
-            'notes'                  => $notes,
-        ]);
+        $shiftTable = db_prefix() . 'pos_shifts';
+        $updateData = [
+            'status' => 'closed',
+        ];
 
-        $this->db->insert(db_prefix() . 'pos_shift_blind_counts', [
-            'shift_id'       => $shift['id'],
-            'counted_cash'   => $countedCash,
-            'counted_card'   => $countedCard,
-            'terminal_total' => $terminalTotal,
-            'notes'          => $notes,
-            'counted_by'     => get_staff_user_id(),
-            'counted_at'     => date('Y-m-d H:i:s'),
-        ]);
+        $optionalFields = [
+            'closed_at' => date('Y-m-d H:i:s'),
+            'closing_expected_cash' => $expectedCashWithFloat,
+            'closing_counted_cash' => $countedCash,
+            'closing_expected_card' => $expectedCard,
+            'closing_counted_card' => $countedCard,
+            'cash_variance' => $countedCash - $expectedCashWithFloat,
+            'card_variance' => $countedCard - $expectedCard,
+            'notes' => $notes,
+        ];
+
+        foreach ($optionalFields as $field => $value) {
+            if ($this->db->field_exists($field, $shiftTable)) {
+                $updateData[$field] = $value;
+            }
+        }
+
+        $this->db->where('id', $shift['id']);
+        $updated = $this->db->update($shiftTable, $updateData);
+        if (!$updated) {
+            $this->json_response(false, 'Failed to close shift. Please verify OmniPOS tables are upgraded and try again.');
+        }
+
+        $blindCountsTable = db_prefix() . 'pos_shift_blind_counts';
+        if ($this->db->table_exists($blindCountsTable)) {
+            $blindData = [];
+            $candidate = [
+                'shift_id' => $shift['id'],
+                'counted_cash' => $countedCash,
+                'counted_card' => $countedCard,
+                'terminal_total' => $terminalTotal,
+                'notes' => $notes,
+                'counted_by' => get_staff_user_id(),
+                'counted_at' => date('Y-m-d H:i:s'),
+            ];
+
+            foreach ($candidate as $field => $value) {
+                if ($this->db->field_exists($field, $blindCountsTable)) {
+                    $blindData[$field] = $value;
+                }
+            }
+
+            if (!empty($blindData)) {
+                $this->db->insert($blindCountsTable, $blindData);
+            }
+        }
 
         $this->json_response(true, 'Shift closed successfully.', [
             'shift_id' => $shift['id'],

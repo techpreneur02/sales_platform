@@ -51,7 +51,7 @@ function omnipos_admin_init_menu()
 
     $CI->app_menu->add_sidebar_children_item('omnipos', [
         'slug'     => 'omnipos-shifts',
-        'name'     => 'Shift Control',
+        'name'     => 'Shift & Returns',
         'href'     => admin_url('omnipos/pos/shifts'),
         'position' => 10,
     ]);
