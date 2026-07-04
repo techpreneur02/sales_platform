@@ -1,0 +1,390 @@
+<?php
+
+defined('BASEPATH') or exit('No direct script access allowed');
+
+/*
+Module Name: OmniPOS
+Description: Tablet-first POS, wallet, loyalty, inventory and shift controls for Perfex CRM.
+Version: 1.0.0
+Requires at least: 3.0.*
+*/
+
+define('OMNIPOS_MODULE_NAME', 'omnipos');
+
+hooks()->add_filter('module_' . OMNIPOS_MODULE_NAME . '_action_links', 'module_omnipos_action_links');
+hooks()->add_action('admin_init', 'omnipos_admin_init_menu');
+hooks()->add_action('app_admin_footer', 'omnipos_inject_scanner_asset');
+hooks()->add_action('clients_init', 'omnipos_add_clients_menu_item');
+hooks()->add_filter('get_client_portal_menu_items', 'omnipos_add_client_portal_menu_item');
+
+register_activation_hook(OMNIPOS_MODULE_NAME, 'omnipos_activation_hook');
+
+function module_omnipos_action_links($actions)
+{
+    $actions[] = '<a href="' . admin_url('omnipos/pos') . '">POS Terminal</a>';
+
+    return $actions;
+}
+
+function omnipos_admin_init_menu()
+{
+    $CI = &get_instance();
+
+    if (!is_staff_logged_in()) {
+        return;
+    }
+
+    $CI->app_menu->add_sidebar_menu_item('omnipos', [
+        'name'     => 'OmniPOS',
+        'href'     => admin_url('omnipos/pos'),
+        'icon'     => 'fa-solid fa-store',
+        'position' => 32,
+    ]);
+
+    $CI->app_menu->add_sidebar_children_item('omnipos', [
+        'slug'     => 'omnipos-terminal',
+        'name'     => 'POS Terminal',
+        'href'     => admin_url('omnipos/pos'),
+        'position' => 5,
+    ]);
+
+    $CI->app_menu->add_sidebar_children_item('omnipos', [
+        'slug'     => 'omnipos-shifts',
+        'name'     => 'Shift Control',
+        'href'     => admin_url('omnipos/pos/shifts'),
+        'position' => 10,
+    ]);
+}
+
+function omnipos_inject_scanner_asset()
+{
+    if (!is_staff_logged_in()) {
+        return;
+    }
+
+    $uri = uri_string();
+
+    if (strpos($uri, 'admin/omnipos/pos') === false) {
+        return;
+    }
+
+    echo '<script src="' . module_dir_url(OMNIPOS_MODULE_NAME, 'assets/js/scanner.js') . '"></script>';
+}
+
+function omnipos_add_clients_menu_item()
+{
+    if (!function_exists('add_theme_menu_item') || !is_client_logged_in()) {
+        return;
+    }
+
+    add_theme_menu_item('omnipos-wallet', [
+        'name'     => 'Company Wallet',
+        'href'     => site_url('omnipos/wallet'),
+        'position' => 35,
+    ]);
+}
+
+function omnipos_add_client_portal_menu_item($items)
+{
+    if (!is_array($items)) {
+        return $items;
+    }
+
+    $items['omnipos_wallet'] = [
+        'name'     => 'Company Wallet',
+        'href'     => site_url('omnipos/wallet'),
+        'icon'     => 'fa-solid fa-wallet',
+        'position' => 35,
+    ];
+
+    return $items;
+}
+
+function omnipos_activation_hook()
+{
+    $CI = &get_instance();
+
+    omnipos_create_default_options();
+
+    $charset = 'utf8mb4';
+    $collate = 'utf8mb4_unicode_ci';
+
+    $tables = [
+        "CREATE TABLE IF NOT EXISTS `" . db_prefix() . "pos_shifts` (
+            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `staff_id` INT UNSIGNED NOT NULL,
+            `register_key` VARCHAR(100) NOT NULL,
+            `opening_float` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            `opened_at` DATETIME NOT NULL,
+            `closed_at` DATETIME NULL,
+            `status` VARCHAR(20) NOT NULL DEFAULT 'open',
+            `closing_expected_cash` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            `closing_counted_cash` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            `closing_expected_card` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            `closing_counted_card` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            `cash_variance` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            `card_variance` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            `notes` TEXT NULL,
+            PRIMARY KEY (`id`),
+            KEY `idx_staff_status` (`staff_id`, `status`),
+            KEY `idx_register_status` (`register_key`, `status`)
+        ) ENGINE=InnoDB DEFAULT CHARSET={$charset} COLLATE={$collate};",
+
+        "CREATE TABLE IF NOT EXISTS `" . db_prefix() . "pos_shift_blind_counts` (
+            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `shift_id` BIGINT UNSIGNED NOT NULL,
+            `counted_cash` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            `counted_card` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            `terminal_total` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            `notes` TEXT NULL,
+            `counted_by` INT UNSIGNED NOT NULL,
+            `counted_at` DATETIME NOT NULL,
+            PRIMARY KEY (`id`),
+            KEY `idx_shift` (`shift_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET={$charset} COLLATE={$collate};",
+
+        "CREATE TABLE IF NOT EXISTS `" . db_prefix() . "pos_carts` (
+            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `staff_id` INT UNSIGNED NOT NULL,
+            `shift_id` BIGINT UNSIGNED NULL,
+            `client_id` INT UNSIGNED NULL,
+            `status` VARCHAR(20) NOT NULL DEFAULT 'active',
+            `created_at` DATETIME NOT NULL,
+            `updated_at` DATETIME NOT NULL,
+            PRIMARY KEY (`id`),
+            KEY `idx_staff_status` (`staff_id`, `status`),
+            KEY `idx_shift` (`shift_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET={$charset} COLLATE={$collate};",
+
+        "CREATE TABLE IF NOT EXISTS `" . db_prefix() . "pos_cart_items` (
+            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `cart_id` BIGINT UNSIGNED NOT NULL,
+            `item_id` INT UNSIGNED NOT NULL,
+            `description` VARCHAR(255) NOT NULL,
+            `long_description` TEXT NULL,
+            `qty` DECIMAL(15,2) NOT NULL DEFAULT 1.00,
+            `unit_price` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            `line_total` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            PRIMARY KEY (`id`),
+            UNIQUE KEY `uniq_cart_item` (`cart_id`, `item_id`),
+            KEY `idx_cart` (`cart_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET={$charset} COLLATE={$collate};",
+
+        "CREATE TABLE IF NOT EXISTS `" . db_prefix() . "pos_suspended_carts` (
+            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `cart_id` BIGINT UNSIGNED NOT NULL,
+            `staff_id` INT UNSIGNED NOT NULL,
+            `label` VARCHAR(120) NULL,
+            `suspended_at` DATETIME NOT NULL,
+            `recalled_at` DATETIME NULL,
+            `status` VARCHAR(20) NOT NULL DEFAULT 'suspended',
+            PRIMARY KEY (`id`),
+            KEY `idx_staff_status` (`staff_id`, `status`)
+        ) ENGINE=InnoDB DEFAULT CHARSET={$charset} COLLATE={$collate};",
+
+        "CREATE TABLE IF NOT EXISTS `" . db_prefix() . "pos_suspended_items` (
+            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `suspended_id` BIGINT UNSIGNED NOT NULL,
+            `item_id` INT UNSIGNED NOT NULL,
+            `description` VARCHAR(255) NOT NULL,
+            `long_description` TEXT NULL,
+            `qty` DECIMAL(15,2) NOT NULL DEFAULT 1.00,
+            `unit_price` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            `line_total` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            PRIMARY KEY (`id`),
+            KEY `idx_suspended` (`suspended_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET={$charset} COLLATE={$collate};",
+
+        "CREATE TABLE IF NOT EXISTS `" . db_prefix() . "pos_transactions` (
+            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `shift_id` BIGINT UNSIGNED NOT NULL,
+            `cart_id` BIGINT UNSIGNED NOT NULL,
+            `invoice_id` INT UNSIGNED NOT NULL,
+            `staff_id` INT UNSIGNED NOT NULL,
+            `client_id` INT UNSIGNED NOT NULL,
+            `subtotal` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            `discount_total` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            `total` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            `payment_type` VARCHAR(20) NOT NULL,
+            `card_brand` VARCHAR(40) NULL,
+            `card_auth_code` VARCHAR(40) NULL,
+            `card_last4` VARCHAR(4) NULL,
+            `created_at` DATETIME NOT NULL,
+            PRIMARY KEY (`id`),
+            KEY `idx_shift` (`shift_id`),
+            KEY `idx_invoice` (`invoice_id`),
+            KEY `idx_client` (`client_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET={$charset} COLLATE={$collate};",
+
+        "CREATE TABLE IF NOT EXISTS `" . db_prefix() . "pos_transaction_items` (
+            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `transaction_id` BIGINT UNSIGNED NOT NULL,
+            `item_id` INT UNSIGNED NOT NULL,
+            `qty` DECIMAL(15,2) NOT NULL DEFAULT 1.00,
+            `unit_price` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            `line_total` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            PRIMARY KEY (`id`),
+            KEY `idx_transaction` (`transaction_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET={$charset} COLLATE={$collate};",
+
+        "CREATE TABLE IF NOT EXISTS `" . db_prefix() . "pos_payment_logs` (
+            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `transaction_id` BIGINT UNSIGNED NOT NULL,
+            `invoice_payment_id` INT UNSIGNED NULL,
+            `payment_type` VARCHAR(20) NOT NULL,
+            `amount` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            `card_brand` VARCHAR(40) NULL,
+            `card_auth_code` VARCHAR(40) NULL,
+            `card_last4` VARCHAR(4) NULL,
+            `created_at` DATETIME NOT NULL,
+            PRIMARY KEY (`id`),
+            KEY `idx_transaction` (`transaction_id`),
+            KEY `idx_payment_type` (`payment_type`)
+        ) ENGINE=InnoDB DEFAULT CHARSET={$charset} COLLATE={$collate};",
+
+        "CREATE TABLE IF NOT EXISTS `" . db_prefix() . "pos_wallet_accounts` (
+            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `client_id` INT UNSIGNED NOT NULL,
+            `balance` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            `status` VARCHAR(20) NOT NULL DEFAULT 'active',
+            `created_at` DATETIME NOT NULL,
+            `updated_at` DATETIME NOT NULL,
+            PRIMARY KEY (`id`),
+            UNIQUE KEY `uniq_client` (`client_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET={$charset} COLLATE={$collate};",
+
+        "CREATE TABLE IF NOT EXISTS `" . db_prefix() . "pos_wallet_staff_accounts` (
+            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `wallet_account_id` BIGINT UNSIGNED NOT NULL,
+            `contact_id` INT UNSIGNED NOT NULL,
+            `barcode` VARCHAR(120) NOT NULL,
+            `pin_hash` VARCHAR(255) NULL,
+            `spending_limit` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            `remaining_limit` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            `status` VARCHAR(20) NOT NULL DEFAULT 'active',
+            `created_at` DATETIME NOT NULL,
+            `updated_at` DATETIME NOT NULL,
+            PRIMARY KEY (`id`),
+            UNIQUE KEY `uniq_barcode` (`barcode`),
+            KEY `idx_wallet` (`wallet_account_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET={$charset} COLLATE={$collate};",
+
+        "CREATE TABLE IF NOT EXISTS `" . db_prefix() . "pos_wallet_ledger` (
+            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `wallet_account_id` BIGINT UNSIGNED NOT NULL,
+            `staff_wallet_id` BIGINT UNSIGNED NULL,
+            `entry_type` VARCHAR(30) NOT NULL,
+            `amount` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            `reference_type` VARCHAR(30) NULL,
+            `reference_id` BIGINT UNSIGNED NULL,
+            `notes` TEXT NULL,
+            `created_by` INT UNSIGNED NULL,
+            `created_at` DATETIME NOT NULL,
+            PRIMARY KEY (`id`),
+            KEY `idx_wallet` (`wallet_account_id`),
+            KEY `idx_ref` (`reference_type`, `reference_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET={$charset} COLLATE={$collate};",
+
+        "CREATE TABLE IF NOT EXISTS `" . db_prefix() . "pos_wallet_topups` (
+            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `wallet_account_id` BIGINT UNSIGNED NOT NULL,
+            `invoice_id` INT UNSIGNED NOT NULL,
+            `amount` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            `status` VARCHAR(20) NOT NULL DEFAULT 'pending',
+            `created_at` DATETIME NOT NULL,
+            PRIMARY KEY (`id`),
+            KEY `idx_wallet` (`wallet_account_id`),
+            KEY `idx_invoice` (`invoice_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET={$charset} COLLATE={$collate};",
+
+        "CREATE TABLE IF NOT EXISTS `" . db_prefix() . "pos_loyalty_balances` (
+            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `client_id` INT UNSIGNED NOT NULL,
+            `points_balance` BIGINT NOT NULL DEFAULT 0,
+            `updated_at` DATETIME NOT NULL,
+            PRIMARY KEY (`id`),
+            UNIQUE KEY `uniq_client` (`client_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET={$charset} COLLATE={$collate};",
+
+        "CREATE TABLE IF NOT EXISTS `" . db_prefix() . "pos_loyalty_ledger` (
+            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `client_id` INT UNSIGNED NOT NULL,
+            `transaction_id` BIGINT UNSIGNED NULL,
+            `entry_type` VARCHAR(20) NOT NULL,
+            `points` BIGINT NOT NULL DEFAULT 0,
+            `notes` VARCHAR(255) NULL,
+            `created_at` DATETIME NOT NULL,
+            PRIMARY KEY (`id`),
+            KEY `idx_client` (`client_id`),
+            KEY `idx_transaction` (`transaction_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET={$charset} COLLATE={$collate};",
+
+        "CREATE TABLE IF NOT EXISTS `" . db_prefix() . "pos_reward_rules` (
+            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `name` VARCHAR(120) NOT NULL,
+            `earn_rate` DECIMAL(12,4) NOT NULL DEFAULT 1.0000,
+            `point_value` DECIMAL(12,4) NOT NULL DEFAULT 0.0100,
+            `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+            `created_at` DATETIME NOT NULL,
+            `updated_at` DATETIME NOT NULL,
+            PRIMARY KEY (`id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET={$charset} COLLATE={$collate};",
+
+        "CREATE TABLE IF NOT EXISTS `" . db_prefix() . "pos_storeroom_stock` (
+            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `item_id` INT UNSIGNED NOT NULL,
+            `qty_on_hand` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            `reorder_level` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            `updated_at` DATETIME NOT NULL,
+            PRIMARY KEY (`id`),
+            UNIQUE KEY `uniq_item` (`item_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET={$charset} COLLATE={$collate};",
+
+        "CREATE TABLE IF NOT EXISTS `" . db_prefix() . "pos_inventory_ledger` (
+            `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            `item_id` INT UNSIGNED NOT NULL,
+            `entry_type` VARCHAR(30) NOT NULL,
+            `qty_change` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            `qty_after` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            `reference_type` VARCHAR(30) NULL,
+            `reference_id` BIGINT UNSIGNED NULL,
+            `notes` TEXT NULL,
+            `created_by` INT UNSIGNED NULL,
+            `created_at` DATETIME NOT NULL,
+            PRIMARY KEY (`id`),
+            KEY `idx_item` (`item_id`),
+            KEY `idx_ref` (`reference_type`, `reference_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET={$charset} COLLATE={$collate};"
+    ];
+
+    foreach ($tables as $tableSql) {
+        $CI->db->query($tableSql);
+    }
+
+    $ruleExists = $CI->db->where('is_active', 1)->count_all_results(db_prefix() . 'pos_reward_rules') > 0;
+    if (!$ruleExists) {
+        $CI->db->insert(db_prefix() . 'pos_reward_rules', [
+            'name'       => 'Default loyalty rule',
+            'earn_rate'  => 1,
+            'point_value'=> 0.01,
+            'is_active'  => 1,
+            'created_at' => date('Y-m-d H:i:s'),
+            'updated_at' => date('Y-m-d H:i:s'),
+        ]);
+    }
+}
+
+function omnipos_create_default_options()
+{
+    if (get_option('pos_loyalty_earn_rate') === '') {
+        add_option('pos_loyalty_earn_rate', '1');
+    }
+
+    if (get_option('pos_loyalty_point_value') === '') {
+        add_option('pos_loyalty_point_value', '0.01');
+    }
+
+    if (get_option('pos_default_register') === '') {
+        add_option('pos_default_register', 'main-register');
+    }
+}
