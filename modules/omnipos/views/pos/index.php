@@ -37,6 +37,31 @@
                             </div>
                         </div>
 
+                        <div class="row">
+                            <div class="col-md-4">
+                                <div class="form-group">
+                                    <label>Wallet Barcode Lookup</label>
+                                    <div class="input-group">
+                                        <input type="text" id="omnipos-wallet-barcode" class="form-control" placeholder="Scan staff QR/barcode token">
+                                        <span class="input-group-btn">
+                                            <button class="btn btn-default" type="button" id="omnipos-wallet-lookup-btn">Lookup</button>
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-8">
+                                <div class="well well-sm tw-mt-2" id="omnipos-wallet-profile" style="display:none;">
+                                    <strong id="omnipos-wallet-name"></strong>
+                                    <span id="omnipos-wallet-employee" class="text-muted"></span>
+                                    <div class="tw-mt-1">
+                                        Available: <span id="omnipos-wallet-available">0.00</span> |
+                                        Remaining Limit: <span id="omnipos-wallet-remaining">0.00</span> |
+                                        Daily Left: <span id="omnipos-wallet-daily-left">0.00</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
                         <ul class="nav nav-pills" id="omnipos-category-tabs">
                             <li class="active"><a href="#" data-group="all">All</a></li>
                             <?php foreach ($items_groups as $group) { ?>
@@ -135,14 +160,17 @@
                         </div>
 
                         <div class="row tw-mt-3">
-                            <div class="col-md-4">
+                            <div class="col-md-3">
                                 <button type="button" class="btn btn-success btn-block omnipos-btn" id="omnipos-checkout-cash">Checkout Cash</button>
                             </div>
-                            <div class="col-md-4">
+                            <div class="col-md-3">
                                 <button type="button" class="btn btn-primary btn-block omnipos-btn" data-toggle="modal" data-target="#omniposCardModal" data-mode="card">Checkout Card</button>
                             </div>
-                            <div class="col-md-4">
+                            <div class="col-md-3">
                                 <button type="button" class="btn btn-warning btn-block omnipos-btn" data-toggle="modal" data-target="#omniposCardModal" data-mode="split">Split Tender</button>
+                            </div>
+                            <div class="col-md-3">
+                                <button type="button" class="btn btn-info btn-block omnipos-btn" id="omnipos-checkout-wallet">Checkout Wallet</button>
                             </div>
                         </div>
                     </div>
@@ -194,6 +222,28 @@
                         </ul>
                     </div>
                 </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="omniposWalletModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal"><span>&times;</span></button>
+                <h4 class="modal-title">Wallet PIN Challenge</h4>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted">Enter customer 4-digit wallet PIN to authorize deduction.</p>
+                <div class="form-group">
+                    <label>Wallet PIN</label>
+                    <input type="password" id="omnipos-wallet-pin" class="form-control" maxlength="4" placeholder="****">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-default" data-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-info" id="omnipos-confirm-wallet-checkout">Confirm Wallet Checkout</button>
             </div>
         </div>
     </div>
@@ -331,6 +381,7 @@
     'use strict';
 
     var zeroStockLocked = <?php echo $zero_stock_locked ? 'true' : 'false'; ?>;
+    var selectedWallet = null;
     var lastTotals = {
         grand_total: 0
     };
@@ -438,6 +489,16 @@
             payload.split_card_amount = parseFloat($('#omnipos-split-card').val() || '0');
         }
 
+        if (paymentType === 'wallet') {
+            if (!selectedWallet) {
+                showMessage('Lookup a wallet staff profile first.', 'warning');
+                return;
+            }
+
+            payload.wallet_staff_id = selectedWallet.id;
+            payload.wallet_pin = $('#omnipos-wallet-pin').val();
+        }
+
         $.post(admin_url + 'omnipos/pos/checkout', csrfPayload(payload), function (res) {
             if (!res || !res.success) {
                 showMessage(res && res.message ? res.message : 'Checkout failed', 'danger');
@@ -446,6 +507,31 @@
             showMessage('Checkout complete. Invoice #' + res.data.invoice_id + ' | Change: ' + money(res.data.change_due), 'success');
             reloadCart();
             $('#omniposCardModal').modal('hide');
+        }, 'json');
+    }
+
+    function applyWalletProfile(walletStaff, clientId) {
+        selectedWallet = walletStaff;
+        $('#omnipos-client-id').val(clientId || 0);
+        $('#omnipos-wallet-profile').show();
+        $('#omnipos-wallet-name').text(walletStaff.full_name || 'Staff Wallet');
+        $('#omnipos-wallet-employee').text(' (' + (walletStaff.employee_code || '') + ')');
+        $('#omnipos-wallet-available').text(money(walletStaff.available_to_spend));
+        $('#omnipos-wallet-remaining').text(money(walletStaff.remaining_limit));
+
+        var dailyLeft = walletStaff.daily_limit > 0 ? Math.max(0, parseFloat(walletStaff.daily_limit) - parseFloat(walletStaff.daily_spent || 0)) : walletStaff.available_to_spend;
+        $('#omnipos-wallet-daily-left').text(money(dailyLeft));
+    }
+
+    function lookupWallet(barcode) {
+        $.post(admin_url + 'omnipos/pos/wallet_lookup', csrfPayload({ barcode: barcode }), function (res) {
+            if (!res || !res.success) {
+                showMessage(res && res.message ? res.message : 'Wallet lookup failed', 'warning');
+                return;
+            }
+
+            applyWalletProfile(res.data.wallet_staff, res.data.client_id);
+            showMessage('Wallet profile loaded: ' + (res.data.wallet_staff.full_name || ''), 'success');
         }, 'json');
     }
 
@@ -514,6 +600,22 @@
             return;
         }
         addItem(parseInt($(this).data('item-id'), 10));
+    });
+
+    $('#omnipos-wallet-lookup-btn').on('click', function () {
+        var token = $.trim($('#omnipos-wallet-barcode').val());
+        if (!token) {
+            showMessage('Enter or scan a wallet barcode token.', 'warning');
+            return;
+        }
+        lookupWallet(token);
+    });
+
+    $('#omnipos-wallet-barcode').on('keypress', function (e) {
+        if (e.which === 13) {
+            e.preventDefault();
+            $('#omnipos-wallet-lookup-btn').click();
+        }
     });
 
     $('#omnipos-category-tabs a').on('click', function (e) {
@@ -594,6 +696,20 @@
         checkout('cash');
     });
 
+    $('#omnipos-checkout-wallet').on('click', function () {
+        if (!selectedWallet) {
+            showMessage('Lookup wallet staff profile first.', 'warning');
+            return;
+        }
+        $('#omnipos-wallet-pin').val('');
+        $('#omniposWalletModal').modal('show');
+    });
+
+    $('#omnipos-confirm-wallet-checkout').on('click', function () {
+        checkout('wallet');
+        $('#omniposWalletModal').modal('hide');
+    });
+
     $('#omniposCardModal').on('show.bs.modal', function (event) {
         var trigger = $(event.relatedTarget);
         var mode = trigger.data('mode') || 'card';
@@ -644,6 +760,12 @@
         var response = event.detail.response;
         if (!response.success) {
             showMessage(response.message || 'Scan failed', 'warning');
+            return;
+        }
+
+        if (response.data && response.data.wallet_staff) {
+            applyWalletProfile(response.data.wallet_staff, response.data.client_id);
+            showMessage('Wallet profile scanned: ' + (response.data.wallet_staff.full_name || ''), 'success');
             return;
         }
 

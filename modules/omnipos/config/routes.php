@@ -3,3 +3,11 @@
 defined('BASEPATH') or exit('No direct script access allowed');
 
 $route['omnipos/wallet'] = 'omnipos/wallet';
+$route['omnipos/wallet/create-staff'] = 'omnipos/create_staff_account';
+$route['omnipos/wallet/request-topup'] = 'omnipos/request_topup';
+$route['omnipos/wallet/transfer-in/(:num)'] = 'omnipos/transfer_in/$1';
+$route['omnipos/wallet/transfer-out/(:num)'] = 'omnipos/transfer_out/$1';
+$route['omnipos/wallet/pin/(:num)'] = 'omnipos/set_staff_pin/$1';
+$route['omnipos/wallet/toggle/(:num)'] = 'omnipos/toggle_staff_status/$1';
+$route['omnipos/wallet/code/(:num)'] = 'omnipos/staff_code/$1';
+$route['omnipos/wallet/export-ledger'] = 'omnipos/ledger_export';

@@ -396,6 +396,10 @@ function omnipos_create_default_options()
     if (get_option('pos_default_tax_rate') === '') {
         add_option('pos_default_tax_rate', '0');
     }
+
+    if (get_option('pos_wallet_require_pin') === '') {
+        add_option('pos_wallet_require_pin', '1');
+    }
 }
 
 function omnipos_upgrade_schema()
@@ -437,5 +441,29 @@ function omnipos_upgrade_schema()
 
     if (!$CI->db->field_exists('modifier_notes', $prefix . 'pos_cart_items')) {
         $CI->db->query('ALTER TABLE `' . $prefix . 'pos_cart_items` ADD `modifier_notes` VARCHAR(255) NULL AFTER `modifier_tax_rate`');
+    }
+
+    if (!$CI->db->field_exists('full_name', $prefix . 'pos_wallet_staff_accounts')) {
+        $CI->db->query('ALTER TABLE `' . $prefix . 'pos_wallet_staff_accounts` ADD `full_name` VARCHAR(191) NULL AFTER `contact_id`');
+    }
+
+    if (!$CI->db->field_exists('job_title', $prefix . 'pos_wallet_staff_accounts')) {
+        $CI->db->query('ALTER TABLE `' . $prefix . 'pos_wallet_staff_accounts` ADD `job_title` VARCHAR(191) NULL AFTER `full_name`');
+    }
+
+    if (!$CI->db->field_exists('employee_code', $prefix . 'pos_wallet_staff_accounts')) {
+        $CI->db->query('ALTER TABLE `' . $prefix . 'pos_wallet_staff_accounts` ADD `employee_code` VARCHAR(100) NULL AFTER `job_title`');
+    }
+
+    if (!$CI->db->field_exists('daily_limit', $prefix . 'pos_wallet_staff_accounts')) {
+        $CI->db->query('ALTER TABLE `' . $prefix . 'pos_wallet_staff_accounts` ADD `daily_limit` DECIMAL(15,2) NOT NULL DEFAULT 0.00 AFTER `remaining_limit`');
+    }
+
+    if (!$CI->db->field_exists('daily_spent', $prefix . 'pos_wallet_staff_accounts')) {
+        $CI->db->query('ALTER TABLE `' . $prefix . 'pos_wallet_staff_accounts` ADD `daily_spent` DECIMAL(15,2) NOT NULL DEFAULT 0.00 AFTER `daily_limit`');
+    }
+
+    if (!$CI->db->field_exists('daily_spent_date', $prefix . 'pos_wallet_staff_accounts')) {
+        $CI->db->query('ALTER TABLE `' . $prefix . 'pos_wallet_staff_accounts` ADD `daily_spent_date` DATE NULL AFTER `daily_spent`');
     }
 }

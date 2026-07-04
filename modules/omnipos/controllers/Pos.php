@@ -115,6 +115,59 @@ class Pos extends AdminController
         ]);
     }
 
+    public function wallet_lookup()
+    {
+        if (!$this->input->is_ajax_request()) {
+            show_404();
+        }
+
+        $barcode = trim((string) $this->input->post('barcode', true));
+        if ($barcode === '') {
+            $this->json_response(false, 'Wallet barcode is required.');
+        }
+
+        $staff = $this->get_wallet_staff_by_barcode($barcode);
+        if (!$staff) {
+            $this->json_response(false, 'No wallet staff account found for barcode.');
+        }
+
+        $this->reset_daily_spend_row_if_needed($staff);
+        $staff = $this->db->where('id', $staff['id'])->get(db_prefix() . 'pos_wallet_staff_accounts')->row_array();
+
+        $wallet = $this->db
+            ->where('id', $staff['wallet_account_id'])
+            ->where('status', 'active')
+            ->get(db_prefix() . 'pos_wallet_accounts')
+            ->row_array();
+
+        if (!$wallet) {
+            $this->json_response(false, 'Master wallet account is inactive or missing.');
+        }
+
+        $available = min((float) $wallet['balance'], (float) $staff['remaining_limit']);
+
+        if ((float) $staff['daily_limit'] > 0) {
+            $dailyLeft = max(0, (float) $staff['daily_limit'] - (float) $staff['daily_spent']);
+            $available = min($available, $dailyLeft);
+        }
+
+        $this->json_response(true, 'Wallet staff loaded.', [
+            'wallet_staff' => [
+                'id' => (int) $staff['id'],
+                'full_name' => (string) $staff['full_name'],
+                'employee_code' => (string) $staff['employee_code'],
+                'barcode' => (string) $staff['barcode'],
+                'status' => (string) $staff['status'],
+                'remaining_limit' => (float) $staff['remaining_limit'],
+                'daily_limit' => (float) $staff['daily_limit'],
+                'daily_spent' => (float) $staff['daily_spent'],
+                'wallet_balance' => (float) $wallet['balance'],
+                'available_to_spend' => round($available, 2),
+            ],
+            'client_id' => (int) $wallet['client_id'],
+        ]);
+    }
+
     public function add_item()
     {
         if (!$this->input->is_ajax_request()) {
@@ -343,7 +396,12 @@ class Pos extends AdminController
 
         $item = $this->find_item_by_barcode($barcode);
         if (!$item) {
-            $this->json_response(false, 'No product found for scanned barcode.');
+            $staff = $this->get_wallet_staff_by_barcode($barcode);
+            if ($staff) {
+                return $this->wallet_lookup();
+            }
+
+            $this->json_response(false, 'No product or wallet profile found for scanned barcode.');
         }
 
         $this->add_item_to_cart($item, 1);
@@ -489,13 +547,15 @@ class Pos extends AdminController
         }
 
         $paymentType = strtolower(trim((string) $this->input->post('payment_type', true)));
-        if (!in_array($paymentType, ['cash', 'card', 'split'], true)) {
-            $this->json_response(false, 'Payment type must be cash, card, or split.');
+        if (!in_array($paymentType, ['cash', 'card', 'split', 'wallet'], true)) {
+            $this->json_response(false, 'Payment type must be cash, card, split, or wallet.');
         }
 
         $cardBrand = trim((string) $this->input->post('card_brand', true));
         $cardAuthCode = trim((string) $this->input->post('card_auth_code', true));
         $cardLast4 = preg_replace('/[^0-9]/', '', (string) $this->input->post('card_last4', true));
+        $walletStaffId = (int) $this->input->post('wallet_staff_id');
+        $walletPin = preg_replace('/[^0-9]/', '', (string) $this->input->post('wallet_pin'));
 
         $totals = $this->calculate_cart_totals($cartItems, $cart);
         $pointsUsed = max(0, (int) $this->input->post('points_to_use'));
@@ -549,6 +609,63 @@ class Pos extends AdminController
 
         if ($paymentType === 'split') {
             $changeDue = max(0, $cashReceived - $splitCashAmount);
+        }
+
+        $walletStaff = null;
+        $masterWallet = null;
+
+        if ($paymentType === 'wallet') {
+            if ($walletStaffId < 1) {
+                $this->json_response(false, 'Wallet staff profile is required.');
+            }
+
+            $walletStaff = $this->db
+                ->where('id', $walletStaffId)
+                ->where('status', 'active')
+                ->get(db_prefix() . 'pos_wallet_staff_accounts')
+                ->row_array();
+
+            if (!$walletStaff) {
+                $this->json_response(false, 'Wallet staff account is not active or was not found.');
+            }
+
+            $this->reset_daily_spend_row_if_needed($walletStaff);
+            $walletStaff = $this->db->where('id', $walletStaffId)->get(db_prefix() . 'pos_wallet_staff_accounts')->row_array();
+
+            if (get_option('pos_wallet_require_pin') === '1') {
+                if (strlen($walletPin) !== 4) {
+                    $this->json_response(false, 'A valid 4-digit wallet PIN is required.');
+                }
+
+                if (empty($walletStaff['pin_hash']) || !password_verify($walletPin, $walletStaff['pin_hash'])) {
+                    $this->json_response(false, 'Invalid wallet PIN.');
+                }
+            }
+
+            $masterWallet = $this->db
+                ->where('id', $walletStaff['wallet_account_id'])
+                ->where('status', 'active')
+                ->get(db_prefix() . 'pos_wallet_accounts')
+                ->row_array();
+
+            if (!$masterWallet) {
+                $this->json_response(false, 'Master wallet account not found or inactive.');
+            }
+
+            if ((int) $masterWallet['client_id'] !== $clientId) {
+                $this->json_response(false, 'Wallet account does not belong to the selected client.');
+            }
+
+            $available = min((float) $masterWallet['balance'], (float) $walletStaff['remaining_limit']);
+
+            if ((float) $walletStaff['daily_limit'] > 0) {
+                $dailyLeft = max(0, (float) $walletStaff['daily_limit'] - (float) $walletStaff['daily_spent']);
+                $available = min($available, $dailyLeft);
+            }
+
+            if ($available < $finalTotal) {
+                $this->json_response(false, 'Wallet balance/limits are insufficient for this checkout.');
+            }
         }
 
         $newItems = [];
@@ -686,6 +803,13 @@ class Pos extends AdminController
                 'transaction_id' => $cardAuthCode,
                 'note' => 'Card ' . $cardBrand . ' ****' . $cardLast4,
             ];
+        } elseif ($paymentType === 'wallet') {
+            $paymentEntries[] = [
+                'type' => 'wallet',
+                'amount' => $invoiceTotal,
+                'transaction_id' => 'POS-WALLET-' . strtoupper(app_generate_hash()),
+                'note' => 'Wallet payment by staff #' . $walletStaffId,
+            ];
         } else {
             $paymentEntries[] = [
                 'type' => 'cash',
@@ -729,6 +853,38 @@ class Pos extends AdminController
             ]);
         }
 
+        if ($paymentType === 'wallet' && $walletStaff && $masterWallet) {
+            $newMasterBalance = (float) $masterWallet['balance'] - $invoiceTotal;
+            $newRemaining = (float) $walletStaff['remaining_limit'] - $invoiceTotal;
+            $newDailySpent = (float) $walletStaff['daily_spent'] + $invoiceTotal;
+
+            $this->db->where('id', $masterWallet['id']);
+            $this->db->update(db_prefix() . 'pos_wallet_accounts', [
+                'balance' => $newMasterBalance,
+                'updated_at' => date('Y-m-d H:i:s'),
+            ]);
+
+            $this->db->where('id', $walletStaff['id']);
+            $this->db->update(db_prefix() . 'pos_wallet_staff_accounts', [
+                'remaining_limit' => $newRemaining,
+                'daily_spent' => $newDailySpent,
+                'daily_spent_date' => date('Y-m-d'),
+                'updated_at' => date('Y-m-d H:i:s'),
+            ]);
+
+            $this->db->insert(db_prefix() . 'pos_wallet_ledger', [
+                'wallet_account_id' => $masterWallet['id'],
+                'staff_wallet_id' => $walletStaff['id'],
+                'entry_type' => 'pos_wallet_debit',
+                'amount' => -$invoiceTotal,
+                'reference_type' => 'transaction',
+                'reference_id' => $transactionId,
+                'notes' => 'POS wallet payment for invoice #' . $invoiceId,
+                'created_by' => get_staff_user_id(),
+                'created_at' => date('Y-m-d H:i:s'),
+            ]);
+        }
+
         if ($pointsUsed > 0) {
             $this->add_loyalty_entry($clientId, $transactionId, 'redeem', -$pointsUsed, 'Redeemed on checkout');
         }
@@ -757,6 +913,7 @@ class Pos extends AdminController
             'points_earned' => $pointsEarned,
             'points_used' => $pointsUsed,
             'change_due' => round($changeDue, 2),
+            'wallet_staff_id' => $paymentType === 'wallet' ? $walletStaffId : null,
         ]);
     }
 
@@ -1079,6 +1236,30 @@ class Pos extends AdminController
         return $qtyOnHand >= (float) $targetQty;
     }
 
+    private function get_wallet_staff_by_barcode($barcode)
+    {
+        return $this->db
+            ->where('barcode', $barcode)
+            ->get(db_prefix() . 'pos_wallet_staff_accounts')
+            ->row_array();
+    }
+
+    private function reset_daily_spend_row_if_needed($staff)
+    {
+        $today = date('Y-m-d');
+
+        if (isset($staff['daily_spent_date']) && $staff['daily_spent_date'] === $today) {
+            return;
+        }
+
+        $this->db->where('id', (int) $staff['id']);
+        $this->db->update(db_prefix() . 'pos_wallet_staff_accounts', [
+            'daily_spent' => 0,
+            'daily_spent_date' => $today,
+            'updated_at' => date('Y-m-d H:i:s'),
+        ]);
+    }
+
     private function add_loyalty_entry($clientId, $transactionId, $entryType, $points, $notes)
     {
         $this->db->insert(db_prefix() . 'pos_loyalty_ledger', [
@@ -1139,6 +1320,10 @@ class Pos extends AdminController
             ];
         }
 
+        if ($paymentType === 'wallet') {
+            return [$this->resolve_payment_mode_id('wallet')];
+        }
+
         return [$this->resolve_payment_mode_id($paymentType)];
     }
 
@@ -1166,6 +1351,19 @@ class Pos extends AdminController
                 ->or_like('name', 'credit')
                 ->or_like('name', 'debit')
                 ->group_end()
+                ->where('active', 1)
+                ->order_by('id', 'ASC')
+                ->get(db_prefix() . 'payment_modes')
+                ->row_array();
+
+            if ($row) {
+                return (int) $row['id'];
+            }
+        }
+
+        if ($paymentType === 'wallet') {
+            $row = $this->db
+                ->like('name', 'wallet')
                 ->where('active', 1)
                 ->order_by('id', 'ASC')
                 ->get(db_prefix() . 'payment_modes')
