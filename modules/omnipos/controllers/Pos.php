@@ -21,8 +21,8 @@ class Pos extends AdminController
     public function index()
     {
         $data['title'] = 'OmniPOS Terminal';
-        $data['items_groups'] = $this->invoice_items_model->get_groups();
-        $data['items'] = $this->invoice_items_model->get();
+        $data['items_groups'] = $this->normalize_item_groups($this->invoice_items_model->get_groups());
+        $data['items'] = $this->normalize_items($this->invoice_items_model->get());
         $data['cart'] = $this->get_active_cart();
         $data['cart_items'] = $this->get_active_cart_items();
         $data['current_shift'] = $this->get_open_shift();
@@ -87,9 +87,13 @@ class Pos extends AdminController
 
         $q = trim((string) $this->input->get('q', true));
 
-        $this->db->select(db_prefix() . 'items.id as itemid, description, long_description, rate, group_id, ' . db_prefix() . 'items_groups.name as group_name');
-        $this->db->from(db_prefix() . 'items');
-        $this->db->join(db_prefix() . 'items_groups', db_prefix() . 'items_groups.id = ' . db_prefix() . 'items.group_id', 'left');
+        $itemsTable = db_prefix() . 'items';
+        $itemPkField = $this->db->field_exists('id', $itemsTable) ? 'id' : 'itemid';
+        $groupField = $this->db->field_exists('group_id', $itemsTable) ? 'group_id' : 'groupid';
+
+        $this->db->select(db_prefix() . 'items.' . $itemPkField . ' as itemid, description, long_description, rate, ' . db_prefix() . 'items.' . $groupField . ' as group_id, ' . db_prefix() . 'items_groups.name as group_name');
+        $this->db->from($itemsTable);
+        $this->db->join(db_prefix() . 'items_groups', db_prefix() . 'items_groups.id = ' . db_prefix() . 'items.' . $groupField, 'left');
 
         if ($q !== '') {
             $safeQ = $this->db->escape_like_str($q);
@@ -106,7 +110,7 @@ class Pos extends AdminController
                 $this->db->or_like('barcode', $q);
             }
 
-            $this->db->or_where('EXISTS (SELECT 1 FROM ' . db_prefix() . 'customfieldsvalues cfv WHERE cfv.relid=' . db_prefix() . 'items.id AND cfv.fieldto="items_pr" AND cfv.value LIKE "%'.$safeQ.'%")', null, false);
+            $this->db->or_where('EXISTS (SELECT 1 FROM ' . db_prefix() . 'customfieldsvalues cfv WHERE cfv.relid=' . db_prefix() . 'items.' . $itemPkField . ' AND cfv.fieldto="items_pr" AND cfv.value LIKE "%'.$safeQ.'%")', null, false);
             $this->db->group_end();
         }
 
@@ -125,6 +129,33 @@ class Pos extends AdminController
         $this->json_response(true, 'Search complete', [
             'items' => $rows,
         ]);
+    }
+
+    private function normalize_items($rows)
+    {
+        $normalized = [];
+        foreach ((array) $rows as $row) {
+            $row = (array) $row;
+
+            $row['itemid'] = isset($row['itemid']) ? (int) $row['itemid'] : (isset($row['id']) ? (int) $row['id'] : 0);
+            $row['group_id'] = isset($row['group_id']) ? (int) $row['group_id'] : (isset($row['groupid']) ? (int) $row['groupid'] : 0);
+
+            $normalized[] = $row;
+        }
+
+        return $normalized;
+    }
+
+    private function normalize_item_groups($rows)
+    {
+        $normalized = [];
+        foreach ((array) $rows as $row) {
+            $row = (array) $row;
+            $row['id'] = isset($row['id']) ? (int) $row['id'] : (isset($row['groupid']) ? (int) $row['groupid'] : 0);
+            $normalized[] = $row;
+        }
+
+        return $normalized;
     }
 
     public function wallet_lookup()

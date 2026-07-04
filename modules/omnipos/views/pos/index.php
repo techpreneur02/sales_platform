@@ -35,6 +35,15 @@
                                 </div>
                             </div>
                             <div class="col-md-4">
+                                <div class="form-group">
+                                    <label>Add Qty</label>
+                                    <input type="number" id="omnipos-add-qty" class="form-control" min="1" step="1" value="1">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="row">
+                            <div class="col-md-4 col-md-offset-8">
                                 <div class="form-group position-relative">
                                     <label>Instant Search</label>
                                     <input type="text" id="omnipos-search" class="form-control" placeholder="Search by name, SKU, barcode, custom fields">
@@ -77,11 +86,13 @@
 
                         <div class="row tw-mt-3" id="omnipos-grid">
                             <?php foreach ($items as $item) {
-                                $itemId = (int) $item['itemid'];
+                                $itemId = isset($item['itemid']) ? (int) $item['itemid'] : (isset($item['id']) ? (int) $item['id'] : 0);
+                                $groupId = isset($item['group_id']) ? (int) $item['group_id'] : (isset($item['groupid']) ? (int) $item['groupid'] : 0);
                                 $stockQty = isset($stock_map[$itemId]) ? (float) $stock_map[$itemId] : 0;
                                 $locked = $zero_stock_locked && $stockQty <= 0;
+                                $itemNameFilter = function_exists('mb_strtolower') ? mb_strtolower((string) $item['description']) : strtolower((string) $item['description']);
                             ?>
-                                <div class="col-md-3 col-xs-6 tw-mb-2 omnipos-item-card" data-group="<?php echo (int) $item['group_id']; ?>" data-item-name="<?php echo e(mb_strtolower($item['description'])); ?>">
+                                <div class="col-md-3 col-xs-6 tw-mb-2 omnipos-item-card" data-group="<?php echo $groupId; ?>" data-item-name="<?php echo e($itemNameFilter); ?>">
                                     <button class="btn btn-default btn-block omnipos-btn omnipos-add-item <?php echo $locked ? 'omnipos-stock-locked' : ''; ?>" data-item-id="<?php echo $itemId; ?>" <?php echo $locked ? 'disabled' : ''; ?>>
                                         <span class="omnipos-item-name"><?php echo e($item['description']); ?></span><br>
                                         <small><?php echo app_format_money((float) $item['rate'], get_base_currency()); ?></small>
@@ -426,8 +437,16 @@
         }
     }
 
-    function addItem(itemId) {
-        $.post(admin_url + 'omnipos/pos/add_item', csrfPayload({ item_id: itemId, qty: 1 }), function (res) {
+    function getAddQty() {
+        var qty = parseInt($('#omnipos-add-qty').val() || '1', 10);
+        if (!qty || qty < 1) {
+            qty = 1;
+        }
+        return qty;
+    }
+
+    function addItem(itemId, qty) {
+        $.post(admin_url + 'omnipos/pos/add_item', csrfPayload({ item_id: itemId, qty: qty || 1 }), function (res) {
             if (!res || !res.success) {
                 showMessage(res && res.message ? res.message : 'Add failed', 'warning');
                 return;
@@ -561,7 +580,7 @@
             showMessage('Item is out of stock.', 'warning');
             return;
         }
-        addItem(parseInt($(this).data('item-id'), 10));
+        addItem(parseInt($(this).data('item-id'), 10), getAddQty());
         $('#omnipos-search-results').addClass('hidden');
         $('#omnipos-search').val('');
     });
@@ -571,7 +590,7 @@
             showMessage('Zero-stock lockout is active for this product.', 'warning');
             return;
         }
-        addItem(parseInt($(this).data('item-id'), 10));
+        addItem(parseInt($(this).data('item-id'), 10), getAddQty());
     });
 
     $('#omnipos-wallet-lookup-btn').on('click', function () {
