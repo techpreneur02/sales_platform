@@ -27,6 +27,8 @@ class Pos extends AdminController
         $data['cart_items'] = $this->get_active_cart_items();
         $data['current_shift'] = $this->get_open_shift();
         $data['warehouses'] = $this->db->where('is_active', 1)->order_by('name', 'ASC')->get(db_prefix() . 'pos_warehouses')->result_array();
+        $data['card_brands'] = $this->parse_setting_lines((string) get_option('pos_card_brands'), ['Visa', 'Mastercard', 'AMEX', 'Discover']);
+        $data['refund_reason_codes'] = $this->parse_setting_lines((string) get_option('pos_refund_reason_codes'), ['RETURNED_GOODS', 'WRONG_ITEM', 'DAMAGED_ITEM', 'CUSTOMER_CANCELLED'], true);
         $data['suspended_carts'] = $this->db
             ->where('staff_id', get_staff_user_id())
             ->where('status', 'suspended')
@@ -1803,5 +1805,32 @@ class Pos extends AdminController
             ->set_output(json_encode($payload));
 
         exit;
+    }
+
+    private function parse_setting_lines($raw, $fallback, $uppercase = false)
+    {
+        $lines = preg_split('/\r\n|\r|\n/', (string) $raw);
+        $values = [];
+
+        foreach ($lines as $line) {
+            $value = trim((string) $line);
+            if ($value === '') {
+                continue;
+            }
+
+            if ($uppercase) {
+                $value = strtoupper($value);
+            }
+
+            $values[] = $value;
+        }
+
+        $values = array_values(array_unique($values));
+
+        if (empty($values)) {
+            return $fallback;
+        }
+
+        return $values;
     }
 }

@@ -62,6 +62,13 @@ function omnipos_admin_init_menu()
         'href'     => admin_url('omnipos/inventory'),
         'position' => 15,
     ]);
+
+    $CI->app_menu->add_sidebar_children_item('omnipos', [
+        'slug'     => 'omnipos-settings',
+        'name'     => 'Settings',
+        'href'     => admin_url('omnipos/settings'),
+        'position' => 20,
+    ]);
 }
 
 function omnipos_inject_scanner_asset()
@@ -497,6 +504,26 @@ function omnipos_create_default_options()
 
     if (get_option('pos_default_warehouse_id') === '') {
         add_option('pos_default_warehouse_id', '1');
+    }
+
+    if (get_option('pos_default_item_unit') === '') {
+        add_option('pos_default_item_unit', 'pcs');
+    }
+
+    if (get_option('pos_item_units') === '') {
+        add_option('pos_item_units', "pcs\nbag\nbox\npack\nbottle\nkg\ng\nl\nml");
+    }
+
+    if (get_option('pos_card_brands') === '') {
+        add_option('pos_card_brands', "Visa\nMastercard\nAMEX\nDiscover");
+    }
+
+    if (get_option('pos_shrinkage_reason_codes') === '') {
+        add_option('pos_shrinkage_reason_codes', "DAMAGED\nEXPIRED\nSTOLEN\nSPILLAGE");
+    }
+
+    if (get_option('pos_refund_reason_codes') === '') {
+        add_option('pos_refund_reason_codes', "RETURNED_GOODS\nWRONG_ITEM\nDAMAGED_ITEM\nCUSTOMER_CANCELLED");
     }
 }
 

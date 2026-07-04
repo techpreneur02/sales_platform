@@ -255,7 +255,11 @@
                         </div>
                         <div class="form-group">
                             <label>Reason</label>
-                            <input type="text" class="form-control" id="omnipos-refund-reason" maxlength="255" placeholder="Returned unopened product">
+                            <select class="form-control" id="omnipos-refund-reason">
+                                <?php foreach ($refund_reason_codes as $code) { ?>
+                                    <option value="<?php echo e($code); ?>"><?php echo e($code); ?></option>
+                                <?php } ?>
+                            </select>
                         </div>
                         <button type="button" class="btn btn-danger btn-block omnipos-btn" id="omnipos-process-refund">Process Refund</button>
                         <button type="button" class="btn btn-default btn-block omnipos-btn tw-mt-2" id="omnipos-load-recent-transactions">Load Recent Sales</button>
@@ -359,10 +363,9 @@
                         <div class="form-group">
                             <label>Card Scheme</label>
                             <select id="omnipos-card-brand" class="form-control">
-                                <option value="Visa">Visa</option>
-                                <option value="Mastercard">Mastercard</option>
-                                <option value="AMEX">AMEX</option>
-                                <option value="Discover">Discover</option>
+                                <?php foreach ($card_brands as $brand) { ?>
+                                    <option value="<?php echo e($brand); ?>"><?php echo e($brand); ?></option>
+                                <?php } ?>
                             </select>
                         </div>
                     </div>

@@ -116,7 +116,11 @@
                             </div>
                             <div class="form-group">
                                 <label>Reason Code</label>
-                                <input type="text" name="reason_code" class="form-control" placeholder="DAMAGED / EXPIRED / STOLEN" required>
+                                <select name="reason_code" class="form-control" required>
+                                    <?php foreach ($shrinkage_reason_codes as $code) { ?>
+                                        <option value="<?php echo e($code); ?>"><?php echo e($code); ?></option>
+                                    <?php } ?>
+                                </select>
                             </div>
                             <div class="form-group">
                                 <label>Notes</label>
@@ -131,6 +135,7 @@
                     <div class="panel-body">
                         <h5>CSV Import / Export</h5>
                         <p class="text-muted">Use template columns exactly: warehouse_code, item_name, unit, price, qty_on_hand, reorder_level, group_name.</p>
+                        <p class="text-muted">Allowed units from settings: <?php echo e(implode(', ', $item_units)); ?></p>
                         <a href="<?php echo admin_url('omnipos/inventory/download_import_template'); ?>" class="btn btn-default btn-sm">Download Template</a>
                         <a href="<?php echo admin_url('omnipos/inventory/export_stock_csv'); ?>" class="btn btn-info btn-sm">Export Stock CSV</a>
 

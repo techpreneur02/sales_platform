@@ -16,3 +16,7 @@ $route['omnipos/inventory'] = 'inventory/index';
 $route['omnipos/inventory/export-stock'] = 'inventory/export_stock_csv';
 $route['omnipos/inventory/import-template'] = 'inventory/download_import_template';
 $route['omnipos/inventory/import-stock'] = 'inventory/import_stock_csv';
+
+$route['omnipos/settings'] = 'settings/index';
+$route['omnipos/settings/save-general'] = 'settings/save_general';
+$route['omnipos/settings/save-dynamic'] = 'settings/save_dynamic_values';

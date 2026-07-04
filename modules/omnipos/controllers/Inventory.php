@@ -22,6 +22,8 @@ class Inventory extends AdminController
         $data['items'] = $this->invoice_items_model->get();
         $data['purchase_orders'] = $this->db->order_by('id', 'DESC')->limit(100)->get(db_prefix() . 'pos_purchase_orders')->result_array();
         $data['ledger'] = $this->db->order_by('id', 'DESC')->limit(200)->get(db_prefix() . 'pos_inventory_ledger')->result_array();
+        $data['item_units'] = $this->get_item_units();
+        $data['shrinkage_reason_codes'] = $this->get_shrinkage_reason_codes();
 
         $this->load->view('omnipos/inventory/index', $data);
     }
@@ -87,7 +89,7 @@ class Inventory extends AdminController
                     'tax' => null,
                     'tax2' => null,
                     'group_id' => $groupId,
-                    'unit' => 'pcs',
+                    'unit' => $this->get_default_item_unit(),
                 ]);
                 $itemId = (int) $this->db->insert_id();
             }
@@ -371,15 +373,16 @@ class Inventory extends AdminController
 
     public function download_import_template()
     {
+        $units = $this->get_item_units();
         $filename = 'omnipos_stock_import_template.csv';
         header('Content-Type: text/csv; charset=utf-8');
         header('Content-Disposition: attachment; filename=' . $filename);
 
         $out = fopen('php://output', 'w');
         fputcsv($out, ['warehouse_code', 'item_name', 'unit', 'price', 'qty_on_hand', 'reorder_level', 'group_name']);
-        fputcsv($out, ['MAIN', 'Demo Espresso Beans 1kg', 'bag', '18.50', '25', '6', 'OmniPOS Inventory']);
-        fputcsv($out, ['MAIN', 'Demo Milk Full Cream 1L', 'pack', '1.95', '120', '20', 'OmniPOS Inventory']);
-        fputcsv($out, ['MAIN', 'Demo Paper Cup 12oz', 'box', '7.25', '40', '8', 'OmniPOS Inventory']);
+        fputcsv($out, ['MAIN', 'Demo Espresso Beans 1kg', $units[0], '18.50', '25', '6', 'OmniPOS Inventory']);
+        fputcsv($out, ['MAIN', 'Demo Milk Full Cream 1L', isset($units[1]) ? $units[1] : $units[0], '1.95', '120', '20', 'OmniPOS Inventory']);
+        fputcsv($out, ['MAIN', 'Demo Paper Cup 12oz', isset($units[2]) ? $units[2] : $units[0], '7.25', '40', '8', 'OmniPOS Inventory']);
         fclose($out);
         exit;
     }
@@ -545,7 +548,7 @@ class Inventory extends AdminController
             ->get(db_prefix() . 'items')
             ->row_array();
 
-        $normalizedUnit = $unit !== '' ? $unit : 'pcs';
+        $normalizedUnit = $this->normalize_item_unit($unit);
         $normalizedPrice = max(0, (float) $price);
 
         if ($item) {
@@ -570,6 +573,71 @@ class Inventory extends AdminController
         ]);
 
         return (int) $this->db->insert_id();
+    }
+
+    private function get_item_units()
+    {
+        return $this->parse_setting_lines((string) get_option('pos_item_units'), ['pcs', 'bag', 'box', 'pack']);
+    }
+
+    private function get_default_item_unit()
+    {
+        $default = trim((string) get_option('pos_default_item_unit'));
+        $units = $this->get_item_units();
+
+        if ($default !== '' && in_array($default, $units, true)) {
+            return $default;
+        }
+
+        return $units[0];
+    }
+
+    private function normalize_item_unit($unit)
+    {
+        $unit = trim((string) $unit);
+        $units = $this->get_item_units();
+
+        if ($unit === '') {
+            return $this->get_default_item_unit();
+        }
+
+        if (in_array($unit, $units, true)) {
+            return $unit;
+        }
+
+        return $this->get_default_item_unit();
+    }
+
+    private function get_shrinkage_reason_codes()
+    {
+        return $this->parse_setting_lines((string) get_option('pos_shrinkage_reason_codes'), ['DAMAGED', 'EXPIRED', 'STOLEN', 'SPILLAGE'], true);
+    }
+
+    private function parse_setting_lines($raw, $fallback, $uppercase = false)
+    {
+        $lines = preg_split('/\r\n|\r|\n/', (string) $raw);
+        $values = [];
+
+        foreach ($lines as $line) {
+            $value = trim((string) $line);
+            if ($value === '') {
+                continue;
+            }
+
+            if ($uppercase) {
+                $value = strtoupper($value);
+            }
+
+            $values[] = $value;
+        }
+
+        $values = array_values(array_unique($values));
+
+        if (empty($values)) {
+            return $fallback;
+        }
+
+        return $values;
     }
 
     private function insert_ledger($warehouseId, $toWarehouseId, $itemId, $entryType, $qtyChange, $qtyAfter, $reasonCode, $refType, $refId, $notes)
